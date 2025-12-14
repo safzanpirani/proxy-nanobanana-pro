@@ -255,6 +255,9 @@ export function Chat() {
   const [editingTurnIdx, setEditingTurnIdx] = useState<number | null>(null);
   const [editInput, setEditInput] = useState('');
   const [editImages, setEditImages] = useState<UploadedImage[]>([]);
+  
+  // Warning for legacy sessions without signature support
+  const [legacySessionWarning, setLegacySessionWarning] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -668,6 +671,7 @@ export function Chat() {
     setCurrentSessionId(null);
     setLastPrompt('');
     setLastImages([]);
+    setLegacySessionWarning(false);
     setCurrent({
       thoughts: [],
       outputs: [],
@@ -754,6 +758,13 @@ export function Chat() {
           history.push({ role: turn.role, parts });
         }
       }
+      
+      // Check if this session has model images without signatures (legacy session)
+      const hasImagesWithoutSignature = data.some(turn => 
+        turn.role === 'model' && 
+        turn.outputs.some(o => o.type === 'image' && o.imageData && !o.signature)
+      );
+      setLegacySessionWarning(hasImagesWithoutSignature);
       
       setConversationHistory(history);
       setCurrent({ thoughts: [], outputs: [], isGenerating: false, phase: 'idle' });
@@ -1264,6 +1275,21 @@ export function Chat() {
             </div>
           )}
 
+          {/* Legacy session warning */}
+          {legacySessionWarning && (
+            <div className="legacy-warning">
+              <span className="warning-icon">⚠</span>
+              <span>This session was created before signature support. Multi-turn editing may not work. Consider starting a new session.</span>
+              <button 
+                type="button" 
+                className="dismiss-warning"
+                onClick={() => setLegacySessionWarning(false)}
+              >
+                ×
+              </button>
+            </div>
+          )}
+
           {conversation.map((turn, idx) => (
             <div key={idx} className={`turn turn-${turn.role}`}>
               {turn.role === 'user' && (
@@ -1374,7 +1400,17 @@ export function Chat() {
                       {turn.images && turn.images.length > 0 && (
                         <div className="user-images">
                           {turn.images.map((img, imgIdx) => (
-                            <div key={imgIdx} className="user-image-thumb">
+                            <div 
+                              key={imgIdx} 
+                              className="user-image-thumb clickable"
+                              onClick={() => img.dataUrl && setLightbox({
+                                imageData: img.dataUrl,
+                                prompt: `Input image: ${img.name}`,
+                                resolution: turn.resolution,
+                                aspectRatio: turn.aspectRatio,
+                                timestamp: turn.timestamp,
+                              })}
+                            >
                               {img.dataUrl && <img src={img.dataUrl} alt={img.name} />}
                             </div>
                           ))}
