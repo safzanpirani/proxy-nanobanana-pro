@@ -269,6 +269,17 @@ export function Chat() {
   
   // Warning for legacy sessions without signature support
   const [legacySessionWarning, setLegacySessionWarning] = useState(false);
+  
+  // Live generation timer
+  const [elapsedTime, setElapsedTime] = useState(0);
+  
+  // Prompt presets
+  const [promptPresets, setPromptPresets] = useState<string[]>(() => {
+    const saved = localStorage.getItem('promptPresets');
+    return saved ? JSON.parse(saved) : [];
+  });
+  const [showPresetInput, setShowPresetInput] = useState(false);
+  const [newPresetText, setNewPresetText] = useState('');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -277,6 +288,19 @@ export function Chat() {
   useEffect(() => {
     storage.getAllSessionsMeta().then(setSessions);
   }, []);
+
+  // Live timer effect
+  useEffect(() => {
+    let interval: ReturnType<typeof setInterval>;
+    if (current.isGenerating && current.startTime) {
+      interval = setInterval(() => {
+        setElapsedTime(Date.now() - current.startTime!);
+      }, 100);
+    } else {
+      setElapsedTime(0);
+    }
+    return () => clearInterval(interval);
+  }, [current.isGenerating, current.startTime]);
 
   useEffect(() => {
     if (outputRef.current) {
@@ -923,7 +947,12 @@ export function Chat() {
         return prev.slice(0, historyEntriesToKeep);
       });
       
-      await generateWithParams(prompt, images, true);
+      // Respect current bulkCount setting
+      if (bulkCount > 1) {
+        await generateBulk(prompt, images);
+      } else {
+        await generateWithParams(prompt, images, true);
+      }
       return;
     }
     
@@ -935,7 +964,12 @@ export function Chat() {
       setConversationHistory(prev => prev.slice(0, -2));
     }
     
-    await generateWithParams(lastPrompt, lastImages, true);
+    // Respect current bulkCount setting
+    if (bulkCount > 1) {
+      await generateBulk(lastPrompt, lastImages);
+    } else {
+      await generateWithParams(lastPrompt, lastImages, true);
+    }
   }
 
   function handleNewSession() {
@@ -952,6 +986,27 @@ export function Chat() {
       isGenerating: false,
       phase: 'idle',
     });
+  }
+
+  // Prompt preset management
+  function addPreset(text: string) {
+    if (!text.trim()) return;
+    const updated = [...promptPresets, text.trim()];
+    setPromptPresets(updated);
+    localStorage.setItem('promptPresets', JSON.stringify(updated));
+    setNewPresetText('');
+    setShowPresetInput(false);
+  }
+
+  function removePreset(index: number) {
+    const updated = promptPresets.filter((_, i) => i !== index);
+    setPromptPresets(updated);
+    localStorage.setItem('promptPresets', JSON.stringify(updated));
+  }
+
+  function usePreset(text: string) {
+    setInput(text);
+    textareaRef.current?.focus();
   }
 
   async function handleLoadSession(session: SavedSessionMeta) {
@@ -1473,6 +1528,62 @@ export function Chat() {
             </div>
 
             <div className="config-section">
+              <label className="config-label">PROMPT PRESETS</label>
+              <div className="presets-list">
+                {promptPresets.map((preset, idx) => (
+                  <div key={idx} className="preset-item">
+                    <button
+                      type="button"
+                      className="preset-btn"
+                      onClick={() => usePreset(preset)}
+                      title={preset}
+                    >
+                      {preset.length > 30 ? preset.slice(0, 30) + '...' : preset}
+                    </button>
+                    <button
+                      type="button"
+                      className="preset-delete"
+                      onClick={() => removePreset(idx)}
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+                {showPresetInput ? (
+                  <div className="preset-input-row">
+                    <input
+                      type="text"
+                      value={newPresetText}
+                      onChange={(e) => setNewPresetText(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') addPreset(newPresetText);
+                        if (e.key === 'Escape') setShowPresetInput(false);
+                      }}
+                      placeholder="Enter preset text..."
+                      autoFocus
+                      className="preset-input"
+                    />
+                    <button
+                      type="button"
+                      className="preset-save"
+                      onClick={() => addPreset(newPresetText)}
+                    >
+                      ✓
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    className="add-preset-btn"
+                    onClick={() => setShowPresetInput(true)}
+                  >
+                    + Add Preset
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="config-section">
               <label className="config-label">SESSION</label>
               <div className="session-actions">
                 <button 
@@ -1838,11 +1949,12 @@ export function Chat() {
                       </div>
                     ))}
                   </div>
+                  <div className="bulk-timer">{(elapsedTime / 1000).toFixed(1)}s</div>
                 </div>
               ) : (
                 <div className="streaming-badge large">
                   <span className="pulse"></span>
-                  GENERATING...
+                  GENERATING... {(elapsedTime / 1000).toFixed(1)}s
                 </div>
               )}
             </div>

@@ -2465,3 +2465,128 @@ body {
     min-height: 80px;
   }
 }
+
+/* Bulk timer */
+.bulk-timer {
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--accent-primary);
+  letter-spacing: 0.05em;
+}
+
+/* Prompt presets */
+.presets-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.preset-item {
+  display: flex;
+  gap: 4px;
+}
+
+.preset-btn {
+  flex: 1;
+  padding: 10px 12px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-family: var(--font-body);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preset-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent-primary);
+  color: var(--text-primary);
+}
+
+.preset-delete {
+  width: 32px;
+  padding: 0;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.preset-delete:hover {
+  background: rgba(255, 107, 53, 0.15);
+  border-color: var(--accent-warm);
+  color: var(--accent-warm);
+}
+
+.preset-input-row {
+  display: flex;
+  gap: 4px;
+}
+
+.preset-input {
+  flex: 1;
+  padding: 10px 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--accent-secondary);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  font-size: 12px;
+}
+
+.preset-input:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(0, 255, 200, 0.2);
+}
+
+.preset-input::placeholder {
+  color: var(--text-muted);
+}
+
+.preset-save {
+  width: 36px;
+  padding: 0;
+  background: var(--accent-secondary);
+  border: 1px solid var(--accent-secondary);
+  border-radius: var(--radius-sm);
+  color: var(--bg-dark);
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.preset-save:hover {
+  transform: scale(1.05);
+}
+
+.add-preset-btn {
+  width: 100%;
+  padding: 10px 12px;
+  background: transparent;
+  border: 1px dashed var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.add-preset-btn:hover {
+  border-color: var(--accent-secondary);
+  color: var(--accent-secondary);
+  background: rgba(0, 255, 200, 0.05);
+}
