@@ -90,8 +90,8 @@ function generateImageId(): string {
 async function storeImage(imageData: string): Promise<string | null> {
   const id = generateImageId();
   
-  // Try progressively lower quality if storage fails
-  const qualities = [0.85, 0.7, 0.5];
+  // Try progressively lower quality if storage fails (start at 60%)
+  const qualities = [0.6, 0.45, 0.3];
   
   for (const quality of qualities) {
     try {
@@ -109,7 +109,7 @@ async function storeImage(imageData: string): Promise<string | null> {
   // All attempts failed, try pruning more aggressively and retry
   try {
     pruneOldImages(10); // Keep only 10 images
-    const webpData = await convertToWebP(imageData, 0.4);
+    const webpData = await convertToWebP(imageData, 0.2);
     localStorage.setItem(IMAGE_PREFIX + id, webpData);
     return id;
   } catch (e) {
