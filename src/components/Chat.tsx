@@ -520,14 +520,27 @@ export function Chat() {
         generationTime: endTime - startTime,
       }]);
 
-      const modelParts = parts.map(p => {
-        const raw = p as Record<string, unknown>;
-        if (raw.thought === true) return null;
-        if (raw.thoughtSignature) {
-          return { ...p, thoughtSignature: raw.thoughtSignature };
+      const modelParts: Part[] = [];
+      
+      for (const part of parts) {
+        const raw = part as Record<string, unknown>;
+        
+        // Skip thought parts
+        if (raw.thought === true) continue;
+        
+        if (part.text) {
+          // Text part
+          modelParts.push({ text: part.text });
+        } else if (part.inlineData) {
+          // Image part - include the full image data for conversation history
+          modelParts.push({
+            inlineData: {
+              mimeType: part.inlineData.mimeType || 'image/png',
+              data: part.inlineData.data,
+            }
+          });
         }
-        return p;
-      }).filter(Boolean) as Part[];
+      }
 
       setConversationHistory(prev => [
         ...prev, 
@@ -610,7 +623,71 @@ export function Chat() {
     if (data) {
       setConversation(data);
       setCurrentSessionId(session.id);
-      setConversationHistory([]);
+      
+      // Rebuild conversation history from loaded turns
+      const history: Content[] = [];
+      for (const turn of data) {
+        const parts: Part[] = [];
+        
+        if (turn.role === 'user') {
+          if (turn.prompt) {
+            parts.push({ text: turn.prompt });
+          }
+          if (turn.images) {
+            for (const img of turn.images) {
+              const base64 = img.dataUrl.split(',')[1];
+              if (base64) {
+                parts.push({
+                  inlineData: {
+                    mimeType: img.mimeType,
+                    data: base64,
+                  }
+                });
+              }
+            }
+          }
+        } else if (turn.role === 'model') {
+          for (const output of turn.outputs) {
+            if (output.type === 'text') {
+              parts.push({ text: output.text });
+            } else if (output.type === 'image' && output.imageData) {
+              // Get base64 from the imageData (could be data URL or storage URL)
+              let base64 = '';
+              if (output.imageData.startsWith('data:')) {
+                base64 = output.imageData.split(',')[1];
+              } else if (output.storageId) {
+                // For storage URLs, we need to fetch the image
+                try {
+                  const response = await fetch(output.imageData);
+                  const blob = await response.blob();
+                  const reader = new FileReader();
+                  const dataUrl = await new Promise<string>((resolve) => {
+                    reader.onloadend = () => resolve(reader.result as string);
+                    reader.readAsDataURL(blob);
+                  });
+                  base64 = dataUrl.split(',')[1];
+                } catch (e) {
+                  console.error('Failed to load image for history:', e);
+                }
+              }
+              if (base64) {
+                parts.push({
+                  inlineData: {
+                    mimeType: output.mimeType || 'image/png',
+                    data: base64,
+                  }
+                });
+              }
+            }
+          }
+        }
+        
+        if (parts.length > 0) {
+          history.push({ role: turn.role, parts });
+        }
+      }
+      
+      setConversationHistory(history);
       setCurrent({ thoughts: [], outputs: [], isGenerating: false, phase: 'idle' });
       setActiveTab('config');
     }
