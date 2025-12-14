@@ -562,18 +562,43 @@ export function Chat() {
         if (raw.thought === true) continue;
         
         if (part.text) {
-          // Text part
-          modelParts.push({ text: part.text });
+          // Text part - include thoughtSignature if present
+          const textPart: Record<string, unknown> = { text: part.text };
+          if (raw.thoughtSignature) {
+            textPart.thoughtSignature = raw.thoughtSignature;
+          }
+          modelParts.push(textPart as Part);
         } else if (part.inlineData) {
-          // Image part - include the full image data for conversation history
-          modelParts.push({
+          // Image part - MUST include thoughtSignature for multi-turn
+          const imagePart: Record<string, unknown> = {
             inlineData: {
               mimeType: part.inlineData.mimeType || 'image/png',
               data: part.inlineData.data,
             }
-          });
+          };
+          if (raw.thoughtSignature) {
+            imagePart.thoughtSignature = raw.thoughtSignature;
+          }
+          modelParts.push(imagePart as Part);
         }
       }
+
+      // Debug: log the history being sent
+      console.log('[DEBUG] Conversation history being sent:', JSON.stringify(
+        [...conversationHistory, { role: 'user', parts: userParts }, { role: 'model', parts: modelParts }]
+          .map(c => ({
+            role: c.role,
+            parts: (c.parts || []).map((p) => {
+              const part = p as Record<string, unknown>;
+              return {
+                hasText: !!part.text,
+                hasImage: !!part.inlineData,
+                hasSignature: !!part.thoughtSignature,
+              };
+            })
+          })),
+        null, 2
+      ));
 
       setConversationHistory(prev => [
         ...prev, 
@@ -682,7 +707,12 @@ export function Chat() {
         } else if (turn.role === 'model') {
           for (const output of turn.outputs) {
             if (output.type === 'text') {
-              parts.push({ text: output.text });
+              // Include signature for text parts
+              const textPart: Record<string, unknown> = { text: output.text };
+              if (output.signature) {
+                textPart.thoughtSignature = output.signature;
+              }
+              parts.push(textPart as Part);
             } else if (output.type === 'image' && output.imageData) {
               // Get base64 from the imageData (could be data URL or storage URL)
               let base64 = '';
@@ -704,12 +734,17 @@ export function Chat() {
                 }
               }
               if (base64) {
-                parts.push({
+                // MUST include thoughtSignature for model-generated images
+                const imagePart: Record<string, unknown> = {
                   inlineData: {
                     mimeType: output.mimeType || 'image/png',
                     data: base64,
                   }
-                });
+                };
+                if (output.signature) {
+                  imagePart.thoughtSignature = output.signature;
+                }
+                parts.push(imagePart as Part);
               }
             }
           }
@@ -966,7 +1001,12 @@ export function Chat() {
       } else if (turn.role === 'model') {
         for (const output of turn.outputs) {
           if (output.type === 'text' && output.text) {
-            parts.push({ text: output.text });
+            // Include signature for text parts too
+            const textPart: Record<string, unknown> = { text: output.text };
+            if (output.signature) {
+              textPart.thoughtSignature = output.signature;
+            }
+            parts.push(textPart as Part);
           } else if (output.type === 'image' && output.imageData) {
             let base64 = '';
             if (output.imageData.startsWith('data:')) {
@@ -986,12 +1026,17 @@ export function Chat() {
               }
             }
             if (base64) {
-              parts.push({
+              // MUST include thoughtSignature for model-generated images
+              const imagePart: Record<string, unknown> = {
                 inlineData: {
                   mimeType: output.mimeType || 'image/png',
                   data: base64,
                 }
-              });
+              };
+              if (output.signature) {
+                imagePart.thoughtSignature = output.signature;
+              }
+              parts.push(imagePart as Part);
             }
           }
         }
@@ -1001,6 +1046,21 @@ export function Chat() {
         history.push({ role: turn.role, parts });
       }
     }
+    
+    console.log('[DEBUG] Rebuilt conversation history:', JSON.stringify(
+      history.map(c => ({
+        role: c.role,
+        parts: (c.parts || []).map((p) => {
+          const part = p as Record<string, unknown>;
+          return {
+            hasText: !!part.text,
+            hasImage: !!part.inlineData,
+            hasSignature: !!part.thoughtSignature,
+          };
+        })
+      })),
+      null, 2
+    ));
     
     setConversationHistory(history);
   }
