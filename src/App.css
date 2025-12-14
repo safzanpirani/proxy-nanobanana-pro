@@ -2531,14 +2531,15 @@ body {
 
 .preset-input-row {
   display: flex;
-  gap: 4px;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .preset-input {
-  flex: 1;
+  width: 100%;
   padding: 10px 12px;
   background: var(--bg-surface);
-  border: 1px solid var(--accent-secondary);
+  border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   color: var(--text-primary);
   font-family: var(--font-body);
@@ -2547,6 +2548,7 @@ body {
 
 .preset-input:focus {
   outline: none;
+  border-color: var(--accent-secondary);
   box-shadow: 0 0 0 2px rgba(0, 255, 200, 0.2);
 }
 
@@ -2555,20 +2557,22 @@ body {
 }
 
 .preset-save {
-  width: 36px;
-  padding: 0;
+  width: 100%;
+  padding: 10px 12px;
   background: var(--accent-secondary);
   border: 1px solid var(--accent-secondary);
   border-radius: var(--radius-sm);
   color: var(--bg-dark);
-  font-size: 14px;
+  font-family: var(--font-mono);
+  font-size: 11px;
   font-weight: 700;
   cursor: pointer;
   transition: all 0.15s ease;
 }
 
 .preset-save:hover {
-  transform: scale(1.05);
+  transform: scale(1.02);
+  box-shadow: 0 2px 8px rgba(0, 255, 200, 0.3);
 }
 
 .add-preset-btn {
@@ -2589,4 +2593,62 @@ body {
   border-color: var(--accent-secondary);
   color: var(--accent-secondary);
   background: rgba(0, 255, 200, 0.05);
+}
+
+.reset-presets-btn {
+  width: 100%;
+  padding: 8px 12px;
+  margin-top: 8px;
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.reset-presets-btn:hover {
+  border-color: var(--accent-warm);
+  color: var(--accent-warm);
+}
+
+.preset-input-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.preset-input-actions .preset-save {
+  flex: 1;
+}
+
+.preset-cancel {
+  flex: 1;
+  padding: 10px 12px;
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.preset-cancel:hover {
+  border-color: var(--text-secondary);
+  color: var(--text-secondary);
+}
+
+.preset-save:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.preset-prompt-input {
+  min-height: 60px;
+  resize: vertical;
 }

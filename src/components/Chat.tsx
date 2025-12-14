@@ -273,12 +273,42 @@ export function Chat() {
   // Live generation timer
   const [elapsedTime, setElapsedTime] = useState(0);
   
-  // Prompt presets
-  const [promptPresets, setPromptPresets] = useState<string[]>(() => {
-    const saved = localStorage.getItem('promptPresets');
-    return saved ? JSON.parse(saved) : [];
+  // Default prompt presets
+  const DEFAULT_PRESETS: Array<{ name: string; prompt: string }> = [
+    // Master Template
+    { name: "📱 iPhone Reality Master", prompt: "IMG_9824.HEIC, candid iPhone 15 Pro photo of [Subject from Image 1] [doing activity/in location], taken with flash, raw style, skin texture, natural skin oils, imperfect framing, motion blur, social media compression, hard lighting, authentic look, 4k." },
+    // Dating - Men
+    { name: "💘 Sunday Coffee (M)", prompt: "Candid iPhone photo of the man from image 1 sitting at an outdoor cafe table, holding a latte, laughing naturally at someone off-camera. Morning sunlight, portrait mode, blurred street background. He is wearing a fitted grey t-shirt. High-key lighting, genuine smile, authentic skin texture." },
+    { name: "💘 Hobbyist Chef (M)", prompt: "Waist-up iPhone shot of the man from image 1 in a modern kitchen, chopping vegetables on a wooden board. He is looking up and smiling. Warm indoor lighting, messy countertop with ingredients. He is wearing a casual button-down with sleeves rolled up. Slight motion blur on the hands, cozy vibe." },
+    { name: "💘 Hiking (M)", prompt: "Full-body wide shot of the man from image 1 standing on a rocky trail with a mountain view behind. Mid-day harsh sunlight, deep shadows, wearing athletic gear and sunglasses. He is looking away towards the horizon. GoPro style wide angle, vivid colors, realistic sweat sheen on skin." },
+    { name: "💘 Dog Dad (M)", prompt: "Close-up selfie taken by the man from image 1 lying on a couch with a golden retriever resting its head on his chest. Indoor soft lighting, grainy texture, cozy atmosphere. The man is smiling softly at the camera. focus on the dog's fur and the man's facial features." },
+    { name: "💘 Formal Event (M)", prompt: "Mirror selfie of the man from image 1 in a well-lit elevator, wearing a sharp navy blue suit and unbuttoned white collar. Metallic elevator textures, overhead fluorescent lighting causing realistic shadows on the face. Confident posture, holding the phone at chest level." },
+    { name: "💘 Bar Candid (M)", prompt: "Slightly blurry, low-light iPhone photo of the man from image 1 holding a cocktail in a dim speakeasy. Neon sign reflecting on his face, red and blue ambient light. He is mid-conversation, looking to the side. Flash photography style, 'night out' aesthetic, red-eye reduction look." },
+    // Dating - Women
+    { name: "💖 Golden Hour (F)", prompt: "Selfie of the woman from image 1 taken during sunset, warm orange light hitting her face directly. Lens flare, wind blowing hair across her face slightly. She is wearing a sundress. detailed skin pores, no makeup look, 'sun-kissed' filter aesthetic, horizon line slightly crooked." },
+    { name: "💖 Brunch Date (F)", prompt: "Across-the-table iPhone shot of the woman from image 1 holding a mimosa, sitting in a trendy restaurant with plants in the background. Natural window lighting from the side. She is laughing with eyes slightly closed. High definition, bright colors, plate of food in the foreground out of focus." },
+    { name: "💖 Gym Mirror (F)", prompt: "Full body mirror selfie of the woman from image 1 in a gym locker room. Fluorescent overhead lights, wearing matching workout set. She is holding the phone covering half her face. Realistic gym background with lockers, slight digital noise, sharp focus on the outfit and posture." },
+    { name: "💖 Museum (F)", prompt: "Candid shot of the woman from image 1 standing in front of a large painting in an art gallery. She is looking back over her shoulder at the camera. Soft, museum spot lighting, quiet atmosphere. She is wearing a stylish trench coat. Minimalist composition, high contrast." },
+    { name: "💖 Cozy Home (F)", prompt: "High-angle selfie of the woman from image 1 sitting on a bed with a messy bun, wearing an oversized sweater and knee-high socks. Reading a book, looking up at the camera. Soft morning light, grainy 'film' simulation, messy bedroom background (pillows, blankets)." },
+    { name: "💖 Night Out (F)", prompt: "Flash photo of the woman from image 1 standing against a brick wall at night. Hard flash lighting, high contrast, wearing a black evening dress. 'Paparazzi' style, red lipstick, sharp shadows behind her, vignette effect." },
+    // Unisex Reality
+    { name: "📸 Car Selfie", prompt: "Selfie of the person from image 1 sitting in the driver's seat of a car. Seatbelt on. Overcast weather outside, soft diffused lighting coming through the window. Raindrops on the window glass. Focus on eyes, realistic skin texture, pore visibility, slightly desaturated colors." },
+    { name: "📸 Grocery Store", prompt: "Waist-up shot of the person from image 1 in a grocery store aisle, holding a box of cereal. Harsh fluorescent aisle lighting, colorful products in background. The person is making a funny face. 4k, raw photo, depth of field, bright colors." },
+    { name: "📸 Office Desk", prompt: "Webcam-style angle or front-facing camera shot of the person from image 1 sitting at an office desk. Computer monitor glow reflecting blue light on their face. Coffee mug in hand. Background includes a whiteboard and office chair. 'Work from home' vibe, slightly grainy." },
+    { name: "📸 Elevator Mirror", prompt: "Full body mirror shot in a corporate elevator. The person from image 1 is looking at the phone screen, not the mirror. Stainless steel reflections, overhead LED lights. wearing casual street style. 'OOTD' (Outfit of the Day) aesthetic, sharp details on shoes and denim texture." },
+  ];
+
+  // Prompt presets with name and prompt
+  const [promptPresets, setPromptPresets] = useState<Array<{ name: string; prompt: string }>>(() => {
+    const saved = localStorage.getItem('promptPresetsV2');
+    if (saved) {
+      return JSON.parse(saved);
+    }
+    // Return defaults if nothing saved
+    return DEFAULT_PRESETS;
   });
   const [showPresetInput, setShowPresetInput] = useState(false);
+  const [newPresetName, setNewPresetName] = useState('');
   const [newPresetText, setNewPresetText] = useState('');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -989,11 +1019,12 @@ export function Chat() {
   }
 
   // Prompt preset management
-  function addPreset(text: string) {
-    if (!text.trim()) return;
-    const updated = [...promptPresets, text.trim()];
+  function addPreset(name: string, prompt: string) {
+    if (!name.trim() || !prompt.trim()) return;
+    const updated = [...promptPresets, { name: name.trim(), prompt: prompt.trim() }];
     setPromptPresets(updated);
-    localStorage.setItem('promptPresets', JSON.stringify(updated));
+    localStorage.setItem('promptPresetsV2', JSON.stringify(updated));
+    setNewPresetName('');
     setNewPresetText('');
     setShowPresetInput(false);
   }
@@ -1001,7 +1032,12 @@ export function Chat() {
   function removePreset(index: number) {
     const updated = promptPresets.filter((_, i) => i !== index);
     setPromptPresets(updated);
-    localStorage.setItem('promptPresets', JSON.stringify(updated));
+    localStorage.setItem('promptPresetsV2', JSON.stringify(updated));
+  }
+
+  function resetPresetsToDefault() {
+    setPromptPresets(DEFAULT_PRESETS);
+    localStorage.setItem('promptPresetsV2', JSON.stringify(DEFAULT_PRESETS));
   }
 
   function usePreset(text: string) {
@@ -1026,7 +1062,7 @@ export function Chat() {
           }
           if (turn.images) {
             for (const img of turn.images) {
-              const base64 = img.dataUrl.split(',')[1];
+              const base64 = img.dataUrl?.split(',')[1];
               if (base64) {
                 parts.push({
                   inlineData: {
@@ -1039,15 +1075,14 @@ export function Chat() {
           }
         } else if (turn.role === 'model') {
           for (const output of turn.outputs) {
-            if (output.type === 'text') {
-              // Include signature for text parts
+            if (output.type === 'text' && output.text) {
+              // Include signature for text parts too
               const textPart: Record<string, unknown> = { text: output.text };
               if (output.signature) {
                 textPart.thoughtSignature = output.signature;
               }
               parts.push(textPart as Part);
             } else if (output.type === 'image' && output.imageData) {
-              // Get base64 from the imageData (could be data URL or storage URL)
               let base64 = '';
               if (output.imageData.startsWith('data:')) {
                 base64 = output.imageData.split(',')[1];
@@ -1535,10 +1570,10 @@ export function Chat() {
                     <button
                       type="button"
                       className="preset-btn"
-                      onClick={() => usePreset(preset)}
-                      title={preset}
+                      onClick={() => usePreset(preset.prompt)}
+                      title={preset.name}
                     >
-                      {preset.length > 30 ? preset.slice(0, 30) + '...' : preset}
+                      {preset.name.length > 30 ? preset.name.slice(0, 30) + '...' : preset.name}
                     </button>
                     <button
                       type="button"
@@ -1553,23 +1588,43 @@ export function Chat() {
                   <div className="preset-input-row">
                     <input
                       type="text"
+                      value={newPresetName}
+                      onChange={(e) => setNewPresetName(e.target.value)}
+                      placeholder="Preset name"
+                      className="preset-input"
+                    />
+                    <input
+                      type="text"
                       value={newPresetText}
                       onChange={(e) => setNewPresetText(e.target.value)}
                       onKeyDown={(e) => {
-                        if (e.key === 'Enter') addPreset(newPresetText);
+                        if (e.key === 'Enter') addPreset(newPresetName, newPresetText);
                         if (e.key === 'Escape') setShowPresetInput(false);
                       }}
-                      placeholder="Enter preset text..."
-                      autoFocus
-                      className="preset-input"
+                      placeholder="Prompt text..."
+                      className="preset-input preset-prompt-input"
                     />
-                    <button
-                      type="button"
-                      className="preset-save"
-                      onClick={() => addPreset(newPresetText)}
-                    >
-                      ✓
-                    </button>
+                    <div className="preset-input-actions">
+                      <button
+                        type="button"
+                        className="preset-save"
+                        onClick={() => addPreset(newPresetName, newPresetText)}
+                        disabled={!newPresetName.trim() || !newPresetText.trim()}
+                      >
+                        Save Preset
+                      </button>
+                      <button
+                        type="button"
+                        className="preset-cancel"
+                        onClick={() => {
+                          setShowPresetInput(false);
+                          setNewPresetName('');
+                          setNewPresetText('');
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    </div>
                   </div>
                 ) : (
                   <button
@@ -1578,6 +1633,15 @@ export function Chat() {
                     onClick={() => setShowPresetInput(true)}
                   >
                     + Add Preset
+                  </button>
+                )}
+                {promptPresets.length > 0 && (
+                  <button
+                    type="button"
+                    className="reset-presets-btn"
+                    onClick={resetPresetsToDefault}
+                  >
+                    ↺ Reset to Defaults
                   </button>
                 )}
               </div>
