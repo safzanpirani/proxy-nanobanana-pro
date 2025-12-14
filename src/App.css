@@ -1617,3 +1617,39 @@ body {
   opacity: 0.4;
   cursor: not-allowed;
 }
+
+/* Image action buttons */
+.image-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.img-action-btn {
+  padding: 4px 10px;
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: all 0.15s ease;
+  text-decoration: none;
+}
+
+.img-action-btn:hover:not(:disabled) {
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
+  color: var(--bg-dark);
+}
+
+.img-action-btn.regen:hover:not(:disabled) {
+  background: var(--accent-secondary);
+  border-color: var(--accent-secondary);
+}
+
+.img-action-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}

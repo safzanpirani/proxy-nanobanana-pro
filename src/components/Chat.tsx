@@ -83,6 +83,29 @@ async function convertToWebP(dataUrl: string, quality = 0.92): Promise<string> {
   });
 }
 
+// Convert data URL to blob URL for opening in new tab
+function dataUrlToBlobUrl(dataUrl: string): string {
+  try {
+    const [header, base64] = dataUrl.split(',');
+    const mimeMatch = header.match(/:(.*?);/);
+    const mimeType = mimeMatch ? mimeMatch[1] : 'image/png';
+    const binary = atob(base64);
+    const array = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      array[i] = binary.charCodeAt(i);
+    }
+    const blob = new Blob([array], { type: mimeType });
+    return URL.createObjectURL(blob);
+  } catch {
+    return dataUrl;
+  }
+}
+
+function openImageInNewTab(dataUrl: string) {
+  const blobUrl = dataUrlToBlobUrl(dataUrl);
+  window.open(blobUrl, '_blank');
+}
+
 function generateImageId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -853,35 +876,42 @@ export function Chat() {
                               timestamp: turn.timestamp,
                             })}
                           >
-                            <a 
-                              href={output.imageData} 
-                              target="_blank" 
-                              rel="noopener noreferrer"
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              <img src={output.imageData} alt={`Generated ${oIdx + 1}`} />
-                            </a>
+                            <img src={output.imageData} alt={`Generated ${oIdx + 1}`} />
                             <figcaption>
                               <span className="image-meta">{turn.resolution} · {turn.aspectRatio}</span>
-                              <a 
-                                href={output.imageData} 
-                                download={`gemini-${turn.resolution}-${turn.aspectRatio.replace(':', 'x')}-${Date.now()}.webp`}
-                                onClick={(e) => e.stopPropagation()}
-                              >
-                                ↓ Download
-                              </a>
-                              <button
-                                type="button"
-                                className="regen-btn"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleRegenerate(idx);
-                                }}
-                                disabled={current.isGenerating}
-                                title="Regenerate this image"
-                              >
-                                ↻ Regen
-                              </button>
+                              <div className="image-actions">
+                                <button
+                                  type="button"
+                                  className="img-action-btn"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    openImageInNewTab(output.imageData!);
+                                  }}
+                                  title="Open in new tab"
+                                >
+                                  ↗ Open
+                                </button>
+                                <a 
+                                  href={output.imageData} 
+                                  download={`gemini-${turn.resolution}-${turn.aspectRatio.replace(':', 'x')}-${Date.now()}.webp`}
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="img-action-btn"
+                                >
+                                  ↓ Download
+                                </a>
+                                <button
+                                  type="button"
+                                  className="img-action-btn regen"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleRegenerate(idx);
+                                  }}
+                                  disabled={current.isGenerating}
+                                  title="Regenerate this image"
+                                >
+                                  ↻ Regen
+                                </button>
+                              </div>
                             </figcaption>
                           </figure>
                         )}
