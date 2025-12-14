@@ -71,6 +71,34 @@ body {
   border-color: var(--accent-primary);
 }
 
+.new-session-fab {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 100;
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-elevated);
+  border: 2px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.new-session-fab:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+}
+
+.new-session-fab svg {
+  flex-shrink: 0;
+}
+
 .studio {
   display: grid;
   grid-template-columns: var(--sidebar-width) 1fr;
@@ -471,7 +499,7 @@ body {
 
 .error-banner {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 12px;
   padding: 16px 20px;
   background: rgba(255, 107, 53, 0.1);
@@ -480,11 +508,15 @@ body {
   color: var(--accent-warm);
   font-family: var(--font-mono);
   font-size: 13px;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .error-icon {
   width: 24px;
   height: 24px;
+  min-width: 24px;
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2106,6 +2138,11 @@ body {
 .msg-action-btn.edit:hover:not(:disabled) {
   color: var(--accent-secondary);
   border-color: var(--accent-secondary);
+}
+
+.msg-action-btn.copy:hover:not(:disabled) {
+  color: var(--accent-primary);
+  border-color: var(--accent-primary);
 }
 
 .msg-action-btn.delete:hover:not(:disabled) {

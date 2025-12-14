@@ -296,6 +296,15 @@ export function Chat() {
     { name: "📸 Grocery Store", prompt: "Waist-up shot of the person from image 1 in a grocery store aisle, holding a box of cereal. Harsh fluorescent aisle lighting, colorful products in background. The person is making a funny face. 4k, raw photo, depth of field, bright colors." },
     { name: "📸 Office Desk", prompt: "Webcam-style angle or front-facing camera shot of the person from image 1 sitting at an office desk. Computer monitor glow reflecting blue light on their face. Coffee mug in hand. Background includes a whiteboard and office chair. 'Work from home' vibe, slightly grainy." },
     { name: "📸 Elevator Mirror", prompt: "Full body mirror shot in a corporate elevator. The person from image 1 is looking at the phone screen, not the mirror. Stainless steel reflections, overhead LED lights. wearing casual street style. 'OOTD' (Outfit of the Day) aesthetic, sharp details on shoes and denim texture." },
+    // Beach & Swimwear
+    { name: "🏖️ Tanning POV (F)", prompt: "IMG_4021.HEIC, high-angle selfie of the woman from image 1 lying on a striped beach towel. She is wearing a colorful triangle bikini. Harsh noon sunlight creating deep shadows under the neck. Sunglasses perched on top of head. Skin looks glistening with tanning oil, visible sand grains on the towel, ocean waves visible in the top corner. 4k, sharp focus." },
+    { name: "🏖️ Golden Hour Dip (F)", prompt: "Waist-up shot of the woman from image 1 standing in the ocean at sunset. She is wearing a black swimsuit. The sun is behind her, creating a silhouette effect with hair glowing gold (rim light). She is looking back at the camera, wet hair slicked back. Water droplets on skin, lens flare, soft focus background." },
+    { name: "🏖️ Poolside Lounge (F)", prompt: "Candid photo of the woman from image 1 sitting on a white lounge chair, wearing a bright neon bikini. She is holding a cold drink with condensation. Bright blue pool water background. Skin texture is highly detailed, showing natural moles and texture. Shot on iPhone 15 Pro, vivid colors, 'vacation mode' aesthetic." },
+    // Indoor & Lingerie
+    { name: "🛌 Lazy Sunday (F)", prompt: "POV shot looking down at the woman from image 1 lying in unmade white bedsheets. She is wearing a soft lace bralette and lounge shorts. One arm is stretching up. Morning sunlight streaming through blinds, creating slat shadows across her torso and the bed. Messy hair, cozy atmosphere, slightly grainy low-light texture." },
+    { name: "🛌 Bathroom Mirror (F)", prompt: "Mirror selfie of the woman from image 1 in a bathroom. She is wearing a matching Calvin Klein underwear set. The mirror has slight smudges/water spots (adding realism). Flash is ON, creating a bright reflection. Background shows a counter with makeup and toiletries. Authentic skin texture, no smoothing filter." },
+    { name: "🛌 Night Slip (F)", prompt: "Disposable camera style photo of the woman from image 1 sitting on the edge of a bed at night. She is wearing a silk slip dress. Direct flash photography, dark background, high contrast shadows. Red-eye reduction look, slightly desaturated colors, 'cool girl' aesthetic." },
+    { name: "🛌 Getting Ready (F)", prompt: "Side profile shot of the woman from image 1 standing near a window, putting on earrings. She is wearing a silk robe that is slightly open showing a hint of lace underneath. Soft overcast window lighting, very natural skin tones. Background is a slightly blurry bedroom interior." },
   ];
 
   // Prompt presets with name and prompt
@@ -1157,11 +1166,14 @@ export function Chat() {
     setEditImages(turn.images || []);
   }
   
-  // Cancel editing
   function handleCancelEdit() {
     setEditingTurnIdx(null);
     setEditInput('');
     setEditImages([]);
+  }
+  
+  function handleCopyPrompt(prompt: string) {
+    navigator.clipboard.writeText(prompt);
   }
   
   // Save edit and regenerate (creates a new branch/version)
@@ -1504,7 +1516,6 @@ export function Chat() {
                     type="button"
                     onClick={() => setResolution(res.value)}
                     className={`res-btn ${resolution === res.value ? 'active' : ''}`}
-                    disabled={current.isGenerating}
                   >
                     <span className="res-label">{res.label}</span>
                     <span className="res-desc">{res.desc}</span>
@@ -1522,7 +1533,6 @@ export function Chat() {
                     type="button"
                     onClick={() => setAspectRatio(ratio.value)}
                     className={`ratio-btn ${aspectRatio === ratio.value ? 'active' : ''}`}
-                    disabled={current.isGenerating}
                     title={ratio.label}
                   >
                     <span className="ratio-icon">{ratio.icon}</span>
@@ -1538,7 +1548,6 @@ export function Chat() {
                 type="button"
                 onClick={() => setUseGrounding(!useGrounding)}
                 className={`toggle-btn ${useGrounding ? 'active' : ''}`}
-                disabled={current.isGenerating}
               >
                 <span className="toggle-icon">{useGrounding ? '◉' : '○'}</span>
                 <span className="toggle-text">Google Search</span>
@@ -1554,7 +1563,6 @@ export function Chat() {
                     type="button"
                     onClick={() => setBulkCount(count)}
                     className={`bulk-btn ${bulkCount === count ? 'active' : ''}`}
-                    disabled={current.isGenerating}
                   >
                     ×{count}
                   </button>
@@ -1715,6 +1723,19 @@ export function Chat() {
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
       >
+        {/* Top-right new session button */}
+        <button 
+          type="button"
+          className="new-session-fab"
+          onClick={handleNewSession}
+          title="New Session"
+        >
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+            <line x1="10" y1="4" x2="10" y2="16" />
+            <line x1="4" y1="10" x2="16" y2="10" />
+          </svg>
+        </button>
+
         {/* Drag overlay */}
         {isDragging && (
           <div className="drag-overlay">
@@ -1793,6 +1814,14 @@ export function Chat() {
                     <div className="message-actions">
                       {editingTurnIdx !== idx && (
                         <>
+                          <button
+                            type="button"
+                            className="msg-action-btn copy"
+                            onClick={() => handleCopyPrompt(turn.prompt || '')}
+                            title="Copy prompt"
+                          >
+                            ⧉
+                          </button>
                           <button
                             type="button"
                             className="msg-action-btn edit"
