@@ -423,10 +423,20 @@ export function Chat() {
     setUploadedImages(prev => prev.filter(img => img.id !== id));
   }
 
-  async function generateWithParams(prompt: string, images: UploadedImage[], useCurrentHistory: boolean = true) {
+  async function generateWithParams(
+    prompt: string, 
+    images: UploadedImage[], 
+    useCurrentHistory: boolean = true,
+    overrideAspectRatio?: AspectRatio,
+    overrideResolution?: Resolution
+  ) {
     if (current.isGenerating) return;
 
     const startTime = Date.now();
+    
+    // Use overrides if provided, otherwise use current sidebar settings
+    const effectiveAspectRatio = overrideAspectRatio ?? aspectRatio;
+    const effectiveResolution = overrideResolution ?? resolution;
 
     if (!currentSessionId) {
       setCurrentSessionId(`${Date.now()}`);
@@ -438,8 +448,8 @@ export function Chat() {
       images: images.length > 0 ? images : undefined,
       thoughts: [],
       outputs: [],
-      aspectRatio,
-      resolution,
+      aspectRatio: effectiveAspectRatio,
+      resolution: effectiveResolution,
       timestamp: new Date(),
     }]);
 
@@ -476,8 +486,8 @@ export function Chat() {
         config: {
           responseModalities: [Modality.TEXT, Modality.IMAGE],
           imageConfig: {
-            aspectRatio,
-            imageSize: resolution,
+            aspectRatio: effectiveAspectRatio,
+            imageSize: effectiveResolution,
           },
           ...(useGrounding ? { tools: [{ googleSearch: {} }] } : {}),
         },
@@ -537,8 +547,8 @@ export function Chat() {
         role: 'model',
         thoughts: collectedThoughts,
         outputs: collectedOutputs,
-        aspectRatio,
-        resolution,
+        aspectRatio: effectiveAspectRatio,
+        resolution: effectiveResolution,
         timestamp: new Date(),
         generationTime: endTime - startTime,
       }]);
@@ -755,6 +765,10 @@ export function Chat() {
     
     if (!userTurn || userTurn.role !== 'user') return;
     
+    // Preserve the original turn's parameters
+    const originalAspectRatio = userTurn.aspectRatio;
+    const originalResolution = userTurn.resolution;
+    
     // Create a version of the current state before editing
     const currentVersion: TurnVersion = {
       id: `v-${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -762,8 +776,8 @@ export function Chat() {
       userImages: userTurn.images,
       modelThoughts: modelTurn?.thoughts || [],
       modelOutputs: modelTurn?.outputs || [],
-      aspectRatio: userTurn.aspectRatio,
-      resolution: userTurn.resolution,
+      aspectRatio: originalAspectRatio,
+      resolution: originalResolution,
       timestamp: userTurn.timestamp,
       generationTime: modelTurn?.generationTime,
     };
@@ -778,35 +792,50 @@ export function Chat() {
     const newPrompt = editInput.trim();
     const newImages = [...editImages];
     
-    // Update user turn with new prompt/images, keeping versions
-    const updatedUserTurn: ConversationTurn = {
-      ...userTurn,
-      prompt: newPrompt || undefined,
-      images: newImages.length > 0 ? newImages : undefined,
-      versions,
-      selectedVersion: versions.length, // Point to the new (upcoming) version
-      timestamp: new Date(),
-    };
+    // Truncate conversation BEFORE the edited turn (we'll add it fresh via generateWithParams)
+    const truncatedConversation = conversation.slice(0, userTurnIdx);
     
-    // Truncate conversation at this point (remove model response and everything after)
-    const newConversation = [
-      ...conversation.slice(0, userTurnIdx),
-      updatedUserTurn,
-    ];
+    // Store versions info to be added after generation
+    // We need to pass this through the generation cycle
+    const versionsToPreserve = versions;
     
-    setConversation(newConversation);
+    setConversation(truncatedConversation);
     
-    // Truncate history as well
-    const historyEntriesToKeep = userTurnIdx; // Each pair = 2 entries, but we want up to (not including) this user turn
-    setConversationHistory(prev => prev.slice(0, historyEntriesToKeep));
+    // Rebuild history from the truncated conversation (turns before the edited one)
+    await rebuildConversationHistory(truncatedConversation);
     
     // Clear edit state
     setEditingTurnIdx(null);
     setEditInput('');
     setEditImages([]);
     
-    // Regenerate with new prompt
-    await generateWithParams(newPrompt, newImages, true);
+    // Regenerate with new prompt but using ORIGINAL parameters
+    await generateWithParams(
+      newPrompt, 
+      newImages, 
+      true,
+      originalAspectRatio,
+      originalResolution
+    );
+    
+    // After generation completes, update the user turn to include versions
+    setConversation(prev => {
+      if (prev.length < 2) return prev;
+      const lastUserIdx = prev.length - 2;
+      const lastUser = prev[lastUserIdx];
+      if (lastUser?.role !== 'user') return prev;
+      
+      return prev.map((turn, idx) => {
+        if (idx === lastUserIdx) {
+          return {
+            ...turn,
+            versions: versionsToPreserve,
+            selectedVersion: versionsToPreserve.length,
+          };
+        }
+        return turn;
+      });
+    });
   }
   
   // Delete a turn pair (user + model)
