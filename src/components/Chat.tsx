@@ -59,14 +59,26 @@ async function resizeImageToThumbnail(dataUrl: string): Promise<string> {
       canvas.height = Math.round(img.height * ratio);
       
       ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-      
-      if (canvas.toDataURL('image/webp').startsWith('data:image/webp')) {
-        resolve(canvas.toDataURL('image/webp', 0.8));
-      } else {
-        resolve(canvas.toDataURL('image/jpeg', 0.7));
-      }
+      resolve(canvas.toDataURL('image/webp', 0.8));
     };
     img.onerror = () => resolve('');
+    img.src = dataUrl;
+  });
+}
+
+// Convert any image to WebP format
+async function convertToWebP(dataUrl: string, quality = 0.92): Promise<string> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width;
+      canvas.height = img.height;
+      const ctx = canvas.getContext('2d')!;
+      ctx.drawImage(img, 0, 0);
+      resolve(canvas.toDataURL('image/webp', quality));
+    };
+    img.onerror = () => resolve(dataUrl); // fallback to original
     img.src = dataUrl;
   });
 }
@@ -75,10 +87,12 @@ function generateImageId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function storeImage(imageData: string): string | null {
+async function storeImage(imageData: string): Promise<string | null> {
   const id = generateImageId();
   try {
-    localStorage.setItem(IMAGE_PREFIX + id, imageData);
+    // Convert to WebP for efficient storage
+    const webpData = await convertToWebP(imageData, 0.92);
+    localStorage.setItem(IMAGE_PREFIX + id, webpData);
     pruneOldImages();
     return id;
   } catch {
@@ -165,35 +179,35 @@ function loadSession(id: string): ConversationTurn[] | null {
   }
 }
 
-function saveSession(id: string, conversation: ConversationTurn[]): ConversationTurn[] {
+async function saveSession(id: string, conversation: ConversationTurn[]): Promise<ConversationTurn[]> {
   try {
-    const forStorage = conversation.map(turn => ({
+    const forStorage = await Promise.all(conversation.map(async turn => ({
       ...turn,
       // Store user-uploaded images and save IDs
-      images: turn.images?.map(img => {
+      images: turn.images ? await Promise.all(turn.images.map(async img => {
         if (img.dataUrl && !img.storageId) {
-          const storageId = storeImage(img.dataUrl);
+          const storageId = await storeImage(img.dataUrl);
           return { ...img, storageId: storageId || img.storageId };
         }
         return img;
-      }),
+      })) : undefined,
       // Store generated images and save IDs
-      outputs: turn.outputs.map(o => {
+      outputs: await Promise.all(turn.outputs.map(async o => {
         if (o.type === 'image' && o.imageData && !o.storageId) {
-          const storageId = storeImage(o.imageData);
+          const storageId = await storeImage(o.imageData);
           return { ...o, storageId: storageId || o.storageId };
         }
         return o;
-      }),
+      })),
       // Store thought images and save IDs
-      thoughts: turn.thoughts.map(t => {
+      thoughts: await Promise.all(turn.thoughts.map(async t => {
         if (t.type === 'thought-image' && t.imageData && !t.storageId) {
-          const storageId = storeImage(t.imageData);
+          const storageId = await storeImage(t.imageData);
           return { ...t, storageId: storageId || t.storageId };
         }
         return t;
-      }),
-    }));
+      })),
+    })));
 
     // Save with empty image data but keep storageIds
     const toSave = forStorage.map(turn => ({
@@ -286,7 +300,7 @@ export function Chat() {
         });
 
         // Save and get updated conversation with storageIds
-        const updatedConversation = saveSession(currentSessionId, conversation);
+        const updatedConversation = await saveSession(currentSessionId, conversation);
         
         // Update conversation state with storageIds if any were added
         const hasNewStorageIds = updatedConversation.some((turn, idx) => {
@@ -812,7 +826,7 @@ export function Chat() {
                               <span className="image-meta">{turn.resolution} · {turn.aspectRatio}</span>
                               <a 
                                 href={output.imageData} 
-                                download={`gemini-${turn.resolution}-${turn.aspectRatio.replace(':', 'x')}-${Date.now()}.png`}
+                                download={`gemini-${turn.resolution}-${turn.aspectRatio.replace(':', 'x')}-${Date.now()}.webp`}
                                 onClick={(e) => e.stopPropagation()}
                               >
                                 ↓ Download
@@ -959,7 +973,7 @@ export function Chat() {
               </div>
               <a 
                 href={lightbox.imageData} 
-                download={`gemini-${lightbox.resolution}-${lightbox.aspectRatio.replace(':', 'x')}-${Date.now()}.png`}
+                download={`gemini-${lightbox.resolution}-${lightbox.aspectRatio.replace(':', 'x')}-${Date.now()}.webp`}
                 className="lightbox-download"
               >
                 ↓ Download Full Size
