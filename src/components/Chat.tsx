@@ -1,5 +1,5 @@
-import { useState, useRef, useEffect, type FormEvent } from 'react';
-import { client, MODEL_ID, ASPECT_RATIOS, RESOLUTIONS, parseResponseParts, Modality, type AspectRatio, type Resolution, type ThoughtPart, type OutputPart, type Content } from '../lib/ai';
+import { useState, useRef, useEffect, type FormEvent, type ChangeEvent } from 'react';
+import { client, MODEL_ID, ASPECT_RATIOS, RESOLUTIONS, parseResponseParts, createImagePart, Modality, type AspectRatio, type Resolution, type ThoughtPart, type OutputPart, type Content, type UploadedImage, type Part } from '../lib/ai';
 
 interface GenerationState {
   thoughts: ThoughtPart[];
@@ -14,6 +14,7 @@ interface GenerationState {
 interface ConversationTurn {
   role: 'user' | 'model';
   prompt?: string;
+  images?: UploadedImage[];
   thoughts: ThoughtPart[];
   outputs: OutputPart[];
   aspectRatio: AspectRatio;
@@ -23,6 +24,7 @@ interface ConversationTurn {
 
 export function Chat() {
   const [input, setInput] = useState('');
+  const [uploadedImages, setUploadedImages] = useState<UploadedImage[]>([]);
   const [aspectRatio, setAspectRatio] = useState<AspectRatio>('1:1');
   const [resolution, setResolution] = useState<Resolution>('1K');
   const [useGrounding, setUseGrounding] = useState(false);
@@ -35,14 +37,8 @@ export function Chat() {
     phase: 'idle',
   });
 
-  const thoughtRef = useRef<HTMLPreElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const outputRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (thoughtRef.current && current.phase === 'thinking') {
-      thoughtRef.current.scrollTop = thoughtRef.current.scrollHeight;
-    }
-  }, [current.thoughts, current.phase]);
 
   useEffect(() => {
     if (outputRef.current) {
@@ -50,17 +46,52 @@ export function Chat() {
     }
   }, [conversation]);
 
+  async function handleFileSelect(e: ChangeEvent<HTMLInputElement>) {
+    const files = e.target.files;
+    if (!files) return;
+
+    const newImages: UploadedImage[] = [];
+    
+    for (const file of Array.from(files)) {
+      if (!file.type.startsWith('image/')) continue;
+      if (uploadedImages.length + newImages.length >= 14) break;
+
+      const reader = new FileReader();
+      const dataUrl = await new Promise<string>((resolve) => {
+        reader.onload = () => resolve(reader.result as string);
+        reader.readAsDataURL(file);
+      });
+
+      newImages.push({
+        id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        dataUrl,
+        mimeType: file.type,
+        name: file.name,
+      });
+    }
+
+    setUploadedImages(prev => [...prev, ...newImages].slice(0, 14));
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  }
+
+  function removeImage(id: string) {
+    setUploadedImages(prev => prev.filter(img => img.id !== id));
+  }
+
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    if (!input.trim() || current.isGenerating) return;
+    if ((!input.trim() && uploadedImages.length === 0) || current.isGenerating) return;
 
     const prompt = input.trim();
+    const images = [...uploadedImages];
     setInput('');
+    setUploadedImages([]);
     const startTime = Date.now();
 
     setConversation(prev => [...prev, {
       role: 'user',
-      prompt,
+      prompt: prompt || undefined,
+      images: images.length > 0 ? images : undefined,
       thoughts: [],
       outputs: [],
       aspectRatio,
@@ -77,9 +108,20 @@ export function Chat() {
     });
 
     try {
+      const userParts: Part[] = [];
+      
+      if (prompt) {
+        userParts.push({ text: prompt });
+      }
+
+      for (const img of images) {
+        const base64 = img.dataUrl.split(',')[1];
+        userParts.push(createImagePart(base64, img.mimeType));
+      }
+
       const contents: Content[] = [
         ...conversationHistory,
-        { role: 'user', parts: [{ text: prompt }] },
+        { role: 'user', parts: userParts },
       ];
 
       const response = await client.models.generateContent({
@@ -127,7 +169,7 @@ export function Chat() {
 
       setConversationHistory(prev => [
         ...prev,
-        { role: 'user', parts: [{ text: prompt }] },
+        { role: 'user', parts: userParts },
         modelContent,
       ]);
 
@@ -145,6 +187,7 @@ export function Chat() {
   function handleNewConversation() {
     setConversation([]);
     setConversationHistory([]);
+    setUploadedImages([]);
     setCurrent({
       thoughts: [],
       outputs: [],
@@ -158,6 +201,7 @@ export function Chat() {
     : null;
 
   const lastModelTurn = [...conversation].reverse().find(t => t.role === 'model');
+  const canSubmit = (input.trim() || uploadedImages.length > 0) && !current.isGenerating;
 
   return (
     <div className="studio">
@@ -244,10 +288,10 @@ export function Chat() {
             <div className="empty-state">
               <div className="empty-icon">◈</div>
               <h2>Gemini 3 Pro Image</h2>
-              <p>Generate and edit images with multi-turn conversation. Watch the model's thinking process as it reasons through your prompts.</p>
+              <p>Generate and edit images with multi-turn conversation. Upload reference images or describe your vision.</p>
               <div className="feature-tags">
+                <span className="feature-tag">Up to 14 Reference Images</span>
                 <span className="feature-tag">Multi-Turn Editing</span>
-                <span className="feature-tag">Thinking Mode</span>
                 <span className="feature-tag">4K Output</span>
               </div>
             </div>
@@ -261,7 +305,18 @@ export function Chat() {
                     <span className="role-label">YOU</span>
                     <span className="turn-config">{turn.resolution} · {turn.aspectRatio}</span>
                   </div>
-                  <div className="message-content">{turn.prompt}</div>
+                  {turn.prompt && (
+                    <div className="message-content">{turn.prompt}</div>
+                  )}
+                  {turn.images && turn.images.length > 0 && (
+                    <div className="user-images">
+                      {turn.images.map((img, imgIdx) => (
+                        <div key={imgIdx} className="user-image-thumb">
+                          <img src={img.dataUrl} alt={img.name} />
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -334,28 +389,69 @@ export function Chat() {
         <form onSubmit={handleSubmit} className="prompt-form sticky">
           {lastModelTurn && lastModelTurn.outputs.some(o => o.type === 'image') && (
             <div className="edit-hint">
-              Continue editing the image above, or describe a new one
+              Continue editing the image above, or upload new reference images
             </div>
           )}
+
+          {uploadedImages.length > 0 && (
+            <div className="uploaded-images-row">
+              {uploadedImages.map(img => (
+                <div key={img.id} className="uploaded-image-preview">
+                  <img src={img.dataUrl} alt={img.name} />
+                  <button
+                    type="button"
+                    className="remove-image-btn"
+                    onClick={() => removeImage(img.id)}
+                    disabled={current.isGenerating}
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+              <span className="image-count">{uploadedImages.length}/14</span>
+            </div>
+          )}
+
           <div className="input-wrapper">
-            <textarea
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  handleSubmit(e);
-                }
-              }}
-              placeholder={conversation.length > 0 ? "Describe your edit..." : "Describe your vision..."}
-              disabled={current.isGenerating}
-              className="prompt-input"
-              rows={2}
-            />
-            <div className="input-actions">
-              <button type="submit" disabled={!input.trim() || current.isGenerating} className="btn btn-generate">
+            <div className="input-row">
+              <button
+                type="button"
+                className="upload-btn"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={current.isGenerating || uploadedImages.length >= 14}
+                title="Upload reference images (up to 14)"
+              >
+                <span className="upload-icon">+</span>
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                multiple
+                onChange={handleFileSelect}
+                style={{ display: 'none' }}
+              />
+              <textarea
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    handleSubmit(e);
+                  }
+                }}
+                placeholder={uploadedImages.length > 0 
+                  ? "Describe what to do with these images..." 
+                  : conversation.length > 0 
+                    ? "Describe your edit..." 
+                    : "Describe your vision or upload reference images..."}
+                disabled={current.isGenerating}
+                className="prompt-input"
+                rows={2}
+              />
+              <button type="submit" disabled={!canSubmit} className="btn btn-generate">
                 <span className="btn-icon">→</span>
-                {current.isGenerating ? 'GENERATING...' : conversation.length > 0 ? 'EDIT' : 'GENERATE'}
+                {current.isGenerating ? '...' : conversation.length > 0 ? 'EDIT' : 'GO'}
               </button>
             </div>
           </div>

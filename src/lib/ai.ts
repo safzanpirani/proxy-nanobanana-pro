@@ -53,6 +53,13 @@ export interface ParsedResponse {
   finishReason?: string;
 }
 
+export interface UploadedImage {
+  id: string;
+  dataUrl: string;
+  mimeType: string;
+  name: string;
+}
+
 export function parseResponseParts(parts: Part[]): ParsedResponse {
   const thoughts: ThoughtPart[] = [];
   const outputs: OutputPart[] = [];
@@ -93,6 +100,28 @@ export function parseResponseParts(parts: Part[]): ParsedResponse {
   }
 
   return { thoughts, outputs };
+}
+
+export function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      const base64 = result.split(',')[1];
+      resolve(base64);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+export function createImagePart(base64: string, mimeType: string): Part {
+  return {
+    inlineData: {
+      data: base64,
+      mimeType,
+    },
+  };
 }
 
 export { Modality };
