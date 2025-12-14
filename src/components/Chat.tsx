@@ -72,7 +72,7 @@ async function resizeImageToThumbnail(dataUrl: string): Promise<string> {
 }
 
 function generateImageId(): string {
-  return `img-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 function storeImage(imageData: string): string | null {
@@ -370,7 +370,7 @@ export function Chat() {
     const startTime = Date.now();
 
     if (!currentSessionId) {
-      setCurrentSessionId(`session-${Date.now()}`);
+      setCurrentSessionId(`${Date.now()}`);
     }
 
     setConversation(prev => [...prev, {
