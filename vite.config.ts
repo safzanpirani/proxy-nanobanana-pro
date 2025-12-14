@@ -22,6 +22,9 @@ function storageApiPlugin() {
     name: 'storage-api',
     configureServer(server: ViteDevServer) {
       ensureDataDirs()
+      console.log('[Storage API] Plugin initialized')
+      console.log('[Storage API] DATA_DIR:', DATA_DIR)
+      console.log('[Storage API] IMAGES_DIR:', IMAGES_DIR)
 
       server.middlewares.use('/api/sessions', (req: IncomingMessage, res: ServerResponse) => {
         if (req.method === 'GET') {
@@ -103,46 +106,34 @@ function storageApiPlugin() {
         }
       })
 
-      server.middlewares.use('/api/images/', (req: IncomingMessage, res: ServerResponse) => {
-        const id = req.url?.replace('/', '') || ''
-        const imageFile = path.join(IMAGES_DIR, `${id}.webp`)
+      // Handle /api/images - MUST come before /api/images/ to properly handle POST
+      server.middlewares.use('/api/images', (req: IncomingMessage, res: ServerResponse, next: () => void) => {
+        // Extract the path after /api/images
+        const urlPath = req.url || ''
+        const imageId = urlPath.replace(/^\//, '')
 
-        if (req.method === 'GET') {
-          try {
-            if (fs.existsSync(imageFile)) {
-              const data = fs.readFileSync(imageFile)
-              res.setHeader('Content-Type', 'image/webp')
-              res.setHeader('Cache-Control', 'public, max-age=31536000')
-              res.end(data)
-            } else {
-              res.statusCode = 404
-              res.end('Not found')
-            }
-          } catch (e) {
-            res.statusCode = 500
-            res.end((e as Error).message)
-          }
-        } else {
-          res.statusCode = 405
-          res.end('Method not allowed')
-        }
-      })
+        console.log(`[Storage API] /api/images - method=${req.method}, url=${req.url}, imageId="${imageId}"`)
 
-      server.middlewares.use('/api/images', (req: IncomingMessage, res: ServerResponse) => {
-        if (req.method === 'POST') {
+        // POST to /api/images (no id) = save new image
+        if (req.method === 'POST' && !imageId) {
+          console.log('[Storage API] Handling POST to save new image')
           let body = ''
           req.on('data', (chunk: Buffer) => body += chunk.toString())
           req.on('end', () => {
             try {
+              console.log(`[Storage API] Received body length: ${body.length}`)
               const { dataUrl } = JSON.parse(body)
               if (!dataUrl) {
+                console.log('[Storage API] ERROR: No dataUrl provided')
                 res.statusCode = 400
                 res.end('{"error":"No dataUrl provided"}')
                 return
               }
 
+              console.log(`[Storage API] dataUrl length: ${dataUrl.length}`)
               const base64Match = dataUrl.match(/^data:image\/\w+;base64,(.+)$/)
               if (!base64Match) {
+                console.log('[Storage API] ERROR: Invalid data URL format')
                 res.statusCode = 400
                 res.end('{"error":"Invalid data URL"}')
                 return
@@ -152,19 +143,48 @@ function storageApiPlugin() {
               const buffer = Buffer.from(base64Match[1], 'base64')
               const imageFile = path.join(IMAGES_DIR, `${id}.webp`)
               
+              console.log(`[Storage API] Writing image to: ${imageFile} (${buffer.length} bytes)`)
               fs.writeFileSync(imageFile, buffer)
+              console.log(`[Storage API] Image saved successfully: ${id}`)
               
               res.setHeader('Content-Type', 'application/json')
               res.end(JSON.stringify({ id, url: `/api/images/${id}` }))
             } catch (e) {
+              console.error('[Storage API] ERROR saving image:', e)
               res.statusCode = 500
               res.end(JSON.stringify({ error: (e as Error).message }))
             }
           })
-        } else {
-          res.statusCode = 405
-          res.end('Method not allowed')
+          return
         }
+
+        // GET /api/images/:id = retrieve image
+        if (req.method === 'GET' && imageId) {
+          const imageFile = path.join(IMAGES_DIR, `${imageId}.webp`)
+          console.log(`[Storage API] GET image: ${imageFile}`)
+          
+          try {
+            if (fs.existsSync(imageFile)) {
+              const data = fs.readFileSync(imageFile)
+              console.log(`[Storage API] Serving image: ${imageId} (${data.length} bytes)`)
+              res.setHeader('Content-Type', 'image/webp')
+              res.setHeader('Cache-Control', 'public, max-age=31536000')
+              res.end(data)
+            } else {
+              console.log(`[Storage API] Image not found: ${imageFile}`)
+              res.statusCode = 404
+              res.end('Not found')
+            }
+          } catch (e) {
+            console.error('[Storage API] ERROR reading image:', e)
+            res.statusCode = 500
+            res.end((e as Error).message)
+          }
+          return
+        }
+
+        // Pass to next middleware if not handled
+        next()
       })
     }
   }
