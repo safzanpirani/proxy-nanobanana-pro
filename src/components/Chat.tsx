@@ -89,13 +89,31 @@ function generateImageId(): string {
 
 async function storeImage(imageData: string): Promise<string | null> {
   const id = generateImageId();
+  
+  // Try progressively lower quality if storage fails
+  const qualities = [0.85, 0.7, 0.5];
+  
+  for (const quality of qualities) {
+    try {
+      const webpData = await convertToWebP(imageData, quality);
+      localStorage.setItem(IMAGE_PREFIX + id, webpData);
+      pruneOldImages();
+      return id;
+    } catch (e) {
+      // Quota exceeded, try lower quality
+      console.warn(`Storage failed at quality ${quality}, trying lower...`);
+      continue;
+    }
+  }
+  
+  // All attempts failed, try pruning more aggressively and retry
   try {
-    // Convert to WebP for efficient storage
-    const webpData = await convertToWebP(imageData, 0.92);
+    pruneOldImages(10); // Keep only 10 images
+    const webpData = await convertToWebP(imageData, 0.4);
     localStorage.setItem(IMAGE_PREFIX + id, webpData);
-    pruneOldImages();
     return id;
-  } catch {
+  } catch (e) {
+    console.error('Failed to store image after all retries:', e);
     return null;
   }
 }
@@ -108,7 +126,7 @@ function loadImage(id: string): string | null {
   }
 }
 
-function pruneOldImages() {
+function pruneOldImages(count = MAX_STORED_IMAGES) {
   try {
     const imageKeys: string[] = [];
     for (let i = 0; i < localStorage.length; i++) {
@@ -118,9 +136,9 @@ function pruneOldImages() {
       }
     }
     
-    if (imageKeys.length > MAX_STORED_IMAGES) {
+    if (imageKeys.length > count) {
       imageKeys.sort();
-      const toRemove = imageKeys.slice(0, imageKeys.length - MAX_STORED_IMAGES);
+      const toRemove = imageKeys.slice(0, imageKeys.length - count);
       toRemove.forEach(key => localStorage.removeItem(key));
     }
   } catch {}
