@@ -1,5 +1,5 @@
-import { useState, useRef, useEffect, type FormEvent, type ChangeEvent } from 'react';
-import { client, MODEL_ID, ASPECT_RATIOS, RESOLUTIONS, parseResponseParts, createImagePart, Modality, type AspectRatio, type Resolution, type ThoughtPart, type OutputPart, type Content, type UploadedImage, type Part } from '../lib/ai';
+import { useState, useRef, useEffect, type FormEvent, type ChangeEvent, type ClipboardEvent } from 'react';
+import { client, MODEL_ID, ASPECT_RATIOS, RESOLUTIONS, createImagePart, Modality, type AspectRatio, type Resolution, type ThoughtPart, type OutputPart, type Content, type UploadedImage, type Part } from '../lib/ai';
 
 interface GenerationState {
   thoughts: ThoughtPart[];
@@ -38,13 +38,31 @@ export function Chat() {
   });
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const outputRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (outputRef.current) {
       outputRef.current.scrollTop = outputRef.current.scrollHeight;
     }
-  }, [conversation]);
+  }, [conversation, current.thoughts, current.outputs]);
+
+  async function addImageFromFile(file: File): Promise<UploadedImage | null> {
+    if (!file.type.startsWith('image/')) return null;
+
+    const reader = new FileReader();
+    const dataUrl = await new Promise<string>((resolve) => {
+      reader.onload = () => resolve(reader.result as string);
+      reader.readAsDataURL(file);
+    });
+
+    return {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      dataUrl,
+      mimeType: file.type,
+      name: file.name || 'pasted-image',
+    };
+  }
 
   async function handleFileSelect(e: ChangeEvent<HTMLInputElement>) {
     const files = e.target.files;
@@ -53,25 +71,35 @@ export function Chat() {
     const newImages: UploadedImage[] = [];
     
     for (const file of Array.from(files)) {
-      if (!file.type.startsWith('image/')) continue;
       if (uploadedImages.length + newImages.length >= 14) break;
-
-      const reader = new FileReader();
-      const dataUrl = await new Promise<string>((resolve) => {
-        reader.onload = () => resolve(reader.result as string);
-        reader.readAsDataURL(file);
-      });
-
-      newImages.push({
-        id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-        dataUrl,
-        mimeType: file.type,
-        name: file.name,
-      });
+      const img = await addImageFromFile(file);
+      if (img) newImages.push(img);
     }
 
     setUploadedImages(prev => [...prev, ...newImages].slice(0, 14));
     if (fileInputRef.current) fileInputRef.current.value = '';
+  }
+
+  async function handlePaste(e: ClipboardEvent) {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+
+    const newImages: UploadedImage[] = [];
+
+    for (const item of Array.from(items)) {
+      if (item.type.startsWith('image/')) {
+        e.preventDefault();
+        const file = item.getAsFile();
+        if (file && uploadedImages.length + newImages.length < 14) {
+          const img = await addImageFromFile(file);
+          if (img) newImages.push(img);
+        }
+      }
+    }
+
+    if (newImages.length > 0) {
+      setUploadedImages(prev => [...prev, ...newImages].slice(0, 14));
+    }
   }
 
   function removeImage(id: string) {
@@ -124,7 +152,7 @@ export function Chat() {
         { role: 'user', parts: userParts },
       ];
 
-      const response = await client.models.generateContent({
+      const streamResponse = await client.models.generateContentStream({
         model: MODEL_ID,
         contents,
         config: {
@@ -137,13 +165,75 @@ export function Chat() {
         },
       });
 
+      const collectedThoughts: ThoughtPart[] = [];
+      const collectedOutputs: OutputPart[] = [];
+      const allParts: Part[] = [];
+
+      for await (const chunk of streamResponse) {
+        const parts = chunk.candidates?.[0]?.content?.parts || [];
+        
+        for (const part of parts) {
+          allParts.push(part);
+          const rawPart = part as Record<string, unknown>;
+          const isThought = rawPart.thought === true;
+
+          if (part.text) {
+            if (isThought) {
+              collectedThoughts.push({ type: 'thought-text', text: part.text });
+              setCurrent(prev => ({
+                ...prev,
+                thoughts: [...collectedThoughts],
+                phase: 'thinking',
+              }));
+            } else {
+              collectedOutputs.push({
+                type: 'text',
+                text: part.text,
+                signature: (rawPart.thoughtSignature || rawPart.thought_signature) as string | undefined,
+              });
+              setCurrent(prev => ({
+                ...prev,
+                outputs: [...collectedOutputs],
+                phase: 'generating',
+              }));
+            }
+          } else if (part.inlineData) {
+            const mimeType = part.inlineData.mimeType || 'image/png';
+            const data = part.inlineData.data;
+
+            if (isThought) {
+              collectedThoughts.push({
+                type: 'thought-image',
+                imageData: `data:${mimeType};base64,${data}`,
+                mimeType,
+              });
+              setCurrent(prev => ({
+                ...prev,
+                thoughts: [...collectedThoughts],
+                phase: 'thinking',
+              }));
+            } else {
+              collectedOutputs.push({
+                type: 'image',
+                imageData: `data:${mimeType};base64,${data}`,
+                mimeType,
+                signature: (rawPart.thoughtSignature || rawPart.thought_signature) as string | undefined,
+              });
+              setCurrent(prev => ({
+                ...prev,
+                outputs: [...collectedOutputs],
+                phase: 'generating',
+              }));
+            }
+          }
+        }
+      }
+
       const endTime = Date.now();
-      const parts = response.candidates?.[0]?.content?.parts || [];
-      const parsed = parseResponseParts(parts);
 
       setCurrent({
-        thoughts: parsed.thoughts,
-        outputs: parsed.outputs,
+        thoughts: collectedThoughts,
+        outputs: collectedOutputs,
         isGenerating: false,
         phase: 'done',
         startTime,
@@ -152,8 +242,8 @@ export function Chat() {
 
       setConversation(prev => [...prev, {
         role: 'model',
-        thoughts: parsed.thoughts,
-        outputs: parsed.outputs,
+        thoughts: collectedThoughts,
+        outputs: collectedOutputs,
         aspectRatio,
         resolution,
         timestamp: new Date(),
@@ -161,7 +251,7 @@ export function Chat() {
 
       const modelContent: Content = {
         role: 'model',
-        parts: parts.filter(p => {
+        parts: allParts.filter(p => {
           const raw = p as Record<string, unknown>;
           return raw.thought !== true;
         }),
@@ -288,10 +378,10 @@ export function Chat() {
             <div className="empty-state">
               <div className="empty-icon">◈</div>
               <h2>Gemini 3 Pro Image</h2>
-              <p>Generate and edit images with multi-turn conversation. Upload reference images or describe your vision.</p>
+              <p>Generate and edit images with multi-turn conversation. Paste images from clipboard (Ctrl+V) or upload reference images.</p>
               <div className="feature-tags">
-                <span className="feature-tag">Up to 14 Reference Images</span>
-                <span className="feature-tag">Multi-Turn Editing</span>
+                <span className="feature-tag">Paste from Clipboard</span>
+                <span className="feature-tag">Live Thinking</span>
                 <span className="feature-tag">4K Output</span>
               </div>
             </div>
@@ -370,11 +460,57 @@ export function Chat() {
           ))}
 
           {current.isGenerating && (
-            <div className="generating-indicator">
-              <div className="streaming-badge large">
-                <span className="pulse"></span>
-                {current.phase === 'thinking' ? 'THINKING...' : 'GENERATING...'}
-              </div>
+            <div className="live-generation">
+              {current.thoughts.length > 0 && (
+                <details className="thinking-details" open>
+                  <summary className="thinking-summary">
+                    <span className="thinking-icon spinning">◐</span>
+                    THINKING ({current.thoughts.length} part{current.thoughts.length > 1 ? 's' : ''})
+                    <span className="live-badge">LIVE</span>
+                  </summary>
+                  <div className="thinking-content-wrap">
+                    {current.thoughts.map((thought, tIdx) => (
+                      <div key={tIdx} className="thought-item">
+                        {thought.type === 'thought-text' && (
+                          <pre className="thinking-content">{thought.text}</pre>
+                        )}
+                        {thought.type === 'thought-image' && thought.imageData && (
+                          <div className="thought-image-card">
+                            <img src={thought.imageData} alt={`Draft ${tIdx + 1}`} />
+                            <span className="thought-badge">Draft {tIdx + 1}</span>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              )}
+
+              {current.outputs.length > 0 && (
+                <div className="live-outputs">
+                  {current.outputs.map((output, oIdx) => (
+                    <div key={oIdx} className="output-item">
+                      {output.type === 'text' && output.text && (
+                        <div className="response-text">{output.text}</div>
+                      )}
+                      {output.type === 'image' && output.imageData && (
+                        <figure className="output-image generating">
+                          <img src={output.imageData} alt={`Generated ${oIdx + 1}`} />
+                        </figure>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {current.thoughts.length === 0 && current.outputs.length === 0 && (
+                <div className="generating-indicator">
+                  <div className="streaming-badge large">
+                    <span className="pulse"></span>
+                    {current.phase === 'thinking' ? 'THINKING...' : 'GENERATING...'}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -389,7 +525,7 @@ export function Chat() {
         <form onSubmit={handleSubmit} className="prompt-form sticky">
           {lastModelTurn && lastModelTurn.outputs.some(o => o.type === 'image') && (
             <div className="edit-hint">
-              Continue editing the image above, or upload new reference images
+              Continue editing the image above, or paste/upload new reference images
             </div>
           )}
 
@@ -432,8 +568,10 @@ export function Chat() {
                 style={{ display: 'none' }}
               />
               <textarea
+                ref={textareaRef}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
+                onPaste={handlePaste}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault();
@@ -443,8 +581,8 @@ export function Chat() {
                 placeholder={uploadedImages.length > 0 
                   ? "Describe what to do with these images..." 
                   : conversation.length > 0 
-                    ? "Describe your edit..." 
-                    : "Describe your vision or upload reference images..."}
+                    ? "Describe your edit... (Ctrl+V to paste images)" 
+                    : "Describe your vision or paste images (Ctrl+V)..."}
                 disabled={current.isGenerating}
                 className="prompt-input"
                 rows={2}

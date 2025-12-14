@@ -1191,3 +1191,47 @@ body {
   height: 48px;
   padding: 0 20px;
 }
+
+.live-generation {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 800px;
+}
+
+.live-outputs {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.output-image.generating {
+  opacity: 0.9;
+  animation: fadeIn 0.3s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 0.9; transform: translateY(0); }
+}
+
+.thinking-icon.spinning {
+  animation: spin 1s linear infinite;
+}
+
+.live-badge {
+  margin-left: auto;
+  padding: 2px 8px;
+  background: var(--accent-secondary);
+  color: var(--bg-dark);
+  border-radius: 10px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  animation: pulse-badge 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse-badge {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
