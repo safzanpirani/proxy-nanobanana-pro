@@ -549,7 +549,33 @@ export function Chat() {
     await generateWithParams(prompt, images, true);
   }
 
-  async function handleRegenerate() {
+  async function handleRegenerate(turnIdx?: number) {
+    if (current.isGenerating) return;
+    
+    // If turnIdx provided, regenerate that specific turn
+    if (turnIdx !== undefined) {
+      // Find the user turn that precedes this model turn
+      const userTurnIdx = turnIdx - 1;
+      if (userTurnIdx < 0 || conversation[userTurnIdx]?.role !== 'user') return;
+      
+      const userTurn = conversation[userTurnIdx];
+      const prompt = userTurn.prompt || '';
+      const images = userTurn.images || [];
+      
+      // Remove this turn and all turns after it
+      setConversation(prev => prev.slice(0, userTurnIdx));
+      setConversationHistory(prev => {
+        // Calculate how many history entries to keep
+        const turnsToKeep = userTurnIdx;
+        const historyEntriesToKeep = Math.floor(turnsToKeep / 2) * 2;
+        return prev.slice(0, historyEntriesToKeep);
+      });
+      
+      await generateWithParams(prompt, images, true);
+      return;
+    }
+    
+    // Default behavior: regenerate last turn
     if (!lastPrompt && lastImages.length === 0) return;
     
     if (conversation.length >= 2 && conversation[conversation.length - 1].role === 'model') {
@@ -604,7 +630,6 @@ export function Chat() {
 
   const lastModelTurn = [...conversation].reverse().find(t => t.role === 'model');
   const canSubmit = (input.trim() || uploadedImages.length > 0) && !current.isGenerating;
-  const canRegenerate = (lastPrompt || lastImages.length > 0) && !current.isGenerating;
 
   return (
     <div className="studio">
@@ -698,19 +723,8 @@ export function Chat() {
                   className="action-btn"
                   disabled={current.isGenerating}
                 >
-                  + New
+                  + New Session
                 </button>
-                {canRegenerate && (
-                  <button 
-                    type="button" 
-                    onClick={handleRegenerate} 
-                    className="action-btn regenerate"
-                    disabled={current.isGenerating}
-                    title="Regenerate with current settings"
-                  >
-                    ↻ Regen
-                  </button>
-                )}
               </div>
             </div>
           </>
@@ -839,7 +853,14 @@ export function Chat() {
                               timestamp: turn.timestamp,
                             })}
                           >
-                            <img src={output.imageData} alt={`Generated ${oIdx + 1}`} />
+                            <a 
+                              href={output.imageData} 
+                              target="_blank" 
+                              rel="noopener noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <img src={output.imageData} alt={`Generated ${oIdx + 1}`} />
+                            </a>
                             <figcaption>
                               <span className="image-meta">{turn.resolution} · {turn.aspectRatio}</span>
                               <a 
@@ -849,6 +870,18 @@ export function Chat() {
                               >
                                 ↓ Download
                               </a>
+                              <button
+                                type="button"
+                                className="regen-btn"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleRegenerate(idx);
+                                }}
+                                disabled={current.isGenerating}
+                                title="Regenerate this image"
+                              >
+                                ↻ Regen
+                              </button>
                             </figcaption>
                           </figure>
                         )}

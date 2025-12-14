@@ -1002,8 +1002,10 @@ body {
 
 .output-image figcaption {
   display: flex;
-  align-items: center;
   justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
   padding: 12px 16px;
   background: var(--bg-elevated);
   border-top: 1px solid var(--border-subtle);
@@ -1590,4 +1592,28 @@ body {
     width: 100%;
     max-height: 40vh;
   }
+}
+
+/* Regen button on images */
+.regen-btn {
+  padding: 4px 10px;
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: all 0.15s ease;
+}
+
+.regen-btn:hover:not(:disabled) {
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
+  color: var(--bg-dark);
+}
+
+.regen-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
