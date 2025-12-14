@@ -22,6 +22,30 @@ interface ConversationTurn {
   timestamp: Date;
 }
 
+interface SavedSession {
+  id: string;
+  name: string;
+  conversation: ConversationTurn[];
+  createdAt: string;
+  updatedAt: string;
+  thumbnail?: string;
+}
+
+const STORAGE_KEY = 'gemini-sessions';
+
+function loadSessions(): SavedSession[] {
+  try {
+    const data = localStorage.getItem(STORAGE_KEY);
+    return data ? JSON.parse(data) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveSessions(sessions: SavedSession[]) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions));
+}
+
 export function Chat() {
   const [input, setInput] = useState('');
   const [uploadedImages, setUploadedImages] = useState<UploadedImage[]>([]);
@@ -36,16 +60,56 @@ export function Chat() {
     isGenerating: false,
     phase: 'idle',
   });
+  
+  const [activeTab, setActiveTab] = useState<'config' | 'history'>('config');
+  const [sessions, setSessions] = useState<SavedSession[]>([]);
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const [lastPrompt, setLastPrompt] = useState<string>('');
+  const [lastImages, setLastImages] = useState<UploadedImage[]>([]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const outputRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    setSessions(loadSessions());
+  }, []);
+
+  useEffect(() => {
     if (outputRef.current) {
       outputRef.current.scrollTop = outputRef.current.scrollHeight;
     }
   }, [conversation, current.thoughts, current.outputs]);
+
+  useEffect(() => {
+    if (currentSessionId && conversation.length > 0) {
+      const thumbnail = conversation
+        .filter(t => t.role === 'model')
+        .flatMap(t => t.outputs)
+        .find(o => o.type === 'image')?.imageData;
+      
+      const firstPrompt = conversation.find(t => t.role === 'user')?.prompt || 'Untitled';
+      
+      setSessions(prev => {
+        const existing = prev.find(s => s.id === currentSessionId);
+        const updated: SavedSession = {
+          id: currentSessionId,
+          name: firstPrompt.slice(0, 50),
+          conversation,
+          createdAt: existing?.createdAt || new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          thumbnail,
+        };
+        
+        const newSessions = existing 
+          ? prev.map(s => s.id === currentSessionId ? updated : s)
+          : [updated, ...prev];
+        
+        saveSessions(newSessions);
+        return newSessions;
+      });
+    }
+  }, [conversation, currentSessionId]);
 
   async function addImageFromFile(file: File): Promise<UploadedImage | null> {
     if (!file.type.startsWith('image/')) return null;
@@ -106,15 +170,14 @@ export function Chat() {
     setUploadedImages(prev => prev.filter(img => img.id !== id));
   }
 
-  async function handleSubmit(e: FormEvent) {
-    e.preventDefault();
-    if ((!input.trim() && uploadedImages.length === 0) || current.isGenerating) return;
+  async function generateWithParams(prompt: string, images: UploadedImage[], useCurrentHistory: boolean = true) {
+    if (current.isGenerating) return;
 
-    const prompt = input.trim();
-    const images = [...uploadedImages];
-    setInput('');
-    setUploadedImages([]);
     const startTime = Date.now();
+
+    if (!currentSessionId) {
+      setCurrentSessionId(`session-${Date.now()}`);
+    }
 
     setConversation(prev => [...prev, {
       role: 'user',
@@ -135,6 +198,9 @@ export function Chat() {
       startTime,
     });
 
+    setLastPrompt(prompt);
+    setLastImages(images);
+
     try {
       const userParts: Part[] = [];
       
@@ -147,10 +213,9 @@ export function Chat() {
         userParts.push(createImagePart(base64, img.mimeType));
       }
 
-      const contents: Content[] = [
-        ...conversationHistory,
-        { role: 'user', parts: userParts },
-      ];
+      const contents: Content[] = useCurrentHistory 
+        ? [...conversationHistory, { role: 'user', parts: userParts }]
+        : [{ role: 'user', parts: userParts }];
 
       const streamResponse = await client.models.generateContentStream({
         model: MODEL_ID,
@@ -180,50 +245,21 @@ export function Chat() {
           if (part.text) {
             if (isThought) {
               collectedThoughts.push({ type: 'thought-text', text: part.text });
-              setCurrent(prev => ({
-                ...prev,
-                thoughts: [...collectedThoughts],
-                phase: 'thinking',
-              }));
+              setCurrent(prev => ({ ...prev, thoughts: [...collectedThoughts], phase: 'thinking' }));
             } else {
-              collectedOutputs.push({
-                type: 'text',
-                text: part.text,
-                signature: (rawPart.thoughtSignature || rawPart.thought_signature) as string | undefined,
-              });
-              setCurrent(prev => ({
-                ...prev,
-                outputs: [...collectedOutputs],
-                phase: 'generating',
-              }));
+              collectedOutputs.push({ type: 'text', text: part.text, signature: rawPart.thoughtSignature as string });
+              setCurrent(prev => ({ ...prev, outputs: [...collectedOutputs], phase: 'generating' }));
             }
           } else if (part.inlineData) {
             const mimeType = part.inlineData.mimeType || 'image/png';
             const data = part.inlineData.data;
 
             if (isThought) {
-              collectedThoughts.push({
-                type: 'thought-image',
-                imageData: `data:${mimeType};base64,${data}`,
-                mimeType,
-              });
-              setCurrent(prev => ({
-                ...prev,
-                thoughts: [...collectedThoughts],
-                phase: 'thinking',
-              }));
+              collectedThoughts.push({ type: 'thought-image', imageData: `data:${mimeType};base64,${data}`, mimeType });
+              setCurrent(prev => ({ ...prev, thoughts: [...collectedThoughts], phase: 'thinking' }));
             } else {
-              collectedOutputs.push({
-                type: 'image',
-                imageData: `data:${mimeType};base64,${data}`,
-                mimeType,
-                signature: (rawPart.thoughtSignature || rawPart.thought_signature) as string | undefined,
-              });
-              setCurrent(prev => ({
-                ...prev,
-                outputs: [...collectedOutputs],
-                phase: 'generating',
-              }));
+              collectedOutputs.push({ type: 'image', imageData: `data:${mimeType};base64,${data}`, mimeType, signature: rawPart.thoughtSignature as string });
+              setCurrent(prev => ({ ...prev, outputs: [...collectedOutputs], phase: 'generating' }));
             }
           }
         }
@@ -251,33 +287,47 @@ export function Chat() {
 
       const modelContent: Content = {
         role: 'model',
-        parts: allParts.filter(p => {
-          const raw = p as Record<string, unknown>;
-          return raw.thought !== true;
-        }),
+        parts: allParts.filter(p => (p as Record<string, unknown>).thought !== true),
       };
 
-      setConversationHistory(prev => [
-        ...prev,
-        { role: 'user', parts: userParts },
-        modelContent,
-      ]);
+      setConversationHistory(prev => [...prev, { role: 'user', parts: userParts }, modelContent]);
 
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      setCurrent(prev => ({
-        ...prev,
-        isGenerating: false,
-        phase: 'done',
-        error: errorMessage,
-      }));
+      setCurrent(prev => ({ ...prev, isGenerating: false, phase: 'done', error: errorMessage }));
     }
   }
 
-  function handleNewConversation() {
+  async function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    if ((!input.trim() && uploadedImages.length === 0) || current.isGenerating) return;
+
+    const prompt = input.trim();
+    const images = [...uploadedImages];
+    setInput('');
+    setUploadedImages([]);
+    
+    await generateWithParams(prompt, images, true);
+  }
+
+  async function handleRegenerate() {
+    if (!lastPrompt && lastImages.length === 0) return;
+    
+    if (conversation.length >= 2 && conversation[conversation.length - 1].role === 'model') {
+      setConversation(prev => prev.slice(0, -2));
+      setConversationHistory(prev => prev.slice(0, -2));
+    }
+    
+    await generateWithParams(lastPrompt, lastImages, true);
+  }
+
+  function handleNewSession() {
     setConversation([]);
     setConversationHistory([]);
     setUploadedImages([]);
+    setCurrentSessionId(null);
+    setLastPrompt('');
+    setLastImages([]);
     setCurrent({
       thoughts: [],
       outputs: [],
@@ -286,12 +336,35 @@ export function Chat() {
     });
   }
 
+  function loadSession(session: SavedSession) {
+    setConversation(session.conversation.map(t => ({
+      ...t,
+      timestamp: new Date(t.timestamp),
+    })));
+    setCurrentSessionId(session.id);
+    setConversationHistory([]);
+    setCurrent({ thoughts: [], outputs: [], isGenerating: false, phase: 'idle' });
+    setActiveTab('config');
+  }
+
+  function deleteSession(id: string) {
+    setSessions(prev => {
+      const newSessions = prev.filter(s => s.id !== id);
+      saveSessions(newSessions);
+      return newSessions;
+    });
+    if (currentSessionId === id) {
+      handleNewSession();
+    }
+  }
+
   const duration = current.startTime && current.endTime
     ? ((current.endTime - current.startTime) / 1000).toFixed(1)
     : null;
 
   const lastModelTurn = [...conversation].reverse().find(t => t.role === 'model');
   const canSubmit = (input.trim() || uploadedImages.length > 0) && !current.isGenerating;
+  const canRegenerate = (lastPrompt || lastImages.length > 0) && !current.isGenerating;
 
   return (
     <div className="studio">
@@ -304,70 +377,143 @@ export function Chat() {
           </div>
         </div>
 
-        <div className="config-section">
-          <label className="config-label">MODEL</label>
-          <div className="config-value config-mono">{MODEL_ID}</div>
-        </div>
-
-        <div className="config-section">
-          <label className="config-label">RESOLUTION</label>
-          <div className="resolution-btns">
-            {RESOLUTIONS.map(res => (
-              <button
-                key={res.value}
-                type="button"
-                onClick={() => setResolution(res.value)}
-                className={`res-btn ${resolution === res.value ? 'active' : ''}`}
-                disabled={current.isGenerating}
-              >
-                <span className="res-label">{res.label}</span>
-                <span className="res-desc">{res.desc}</span>
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="config-section">
-          <label className="config-label">ASPECT RATIO</label>
-          <div className="ratio-grid">
-            {ASPECT_RATIOS.slice(0, 6).map(ratio => (
-              <button
-                key={ratio.value}
-                type="button"
-                onClick={() => setAspectRatio(ratio.value)}
-                className={`ratio-btn ${aspectRatio === ratio.value ? 'active' : ''}`}
-                disabled={current.isGenerating}
-                title={ratio.label}
-              >
-                <span className="ratio-icon">{ratio.icon}</span>
-                <span className="ratio-label">{ratio.label}</span>
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="config-section">
-          <label className="config-label">GROUNDING</label>
-          <button
-            type="button"
-            onClick={() => setUseGrounding(!useGrounding)}
-            className={`toggle-btn ${useGrounding ? 'active' : ''}`}
-            disabled={current.isGenerating}
+        <div className="tab-switcher">
+          <button 
+            className={`tab-btn ${activeTab === 'config' ? 'active' : ''}`}
+            onClick={() => setActiveTab('config')}
           >
-            <span className="toggle-icon">{useGrounding ? '◉' : '○'}</span>
-            <span className="toggle-text">Google Search</span>
+            CONFIG
+          </button>
+          <button 
+            className={`tab-btn ${activeTab === 'history' ? 'active' : ''}`}
+            onClick={() => setActiveTab('history')}
+          >
+            HISTORY ({sessions.length})
           </button>
         </div>
 
-        {conversation.length > 0 && (
-          <div className="config-section">
-            <label className="config-label">CONVERSATION</label>
-            <div className="conv-info">
-              <span className="conv-count">{Math.ceil(conversation.length / 2)} turn{conversation.length > 2 ? 's' : ''}</span>
-              <button type="button" onClick={handleNewConversation} className="new-conv-btn">
-                New
+        {activeTab === 'config' && (
+          <>
+            <div className="config-section">
+              <label className="config-label">MODEL</label>
+              <div className="config-value config-mono">{MODEL_ID}</div>
+            </div>
+
+            <div className="config-section">
+              <label className="config-label">RESOLUTION</label>
+              <div className="resolution-btns">
+                {RESOLUTIONS.map(res => (
+                  <button
+                    key={res.value}
+                    type="button"
+                    onClick={() => setResolution(res.value)}
+                    className={`res-btn ${resolution === res.value ? 'active' : ''}`}
+                    disabled={current.isGenerating}
+                  >
+                    <span className="res-label">{res.label}</span>
+                    <span className="res-desc">{res.desc}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="config-section">
+              <label className="config-label">ASPECT RATIO</label>
+              <div className="ratio-grid">
+                {ASPECT_RATIOS.slice(0, 6).map(ratio => (
+                  <button
+                    key={ratio.value}
+                    type="button"
+                    onClick={() => setAspectRatio(ratio.value)}
+                    className={`ratio-btn ${aspectRatio === ratio.value ? 'active' : ''}`}
+                    disabled={current.isGenerating}
+                    title={ratio.label}
+                  >
+                    <span className="ratio-icon">{ratio.icon}</span>
+                    <span className="ratio-label">{ratio.label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="config-section">
+              <label className="config-label">GROUNDING</label>
+              <button
+                type="button"
+                onClick={() => setUseGrounding(!useGrounding)}
+                className={`toggle-btn ${useGrounding ? 'active' : ''}`}
+                disabled={current.isGenerating}
+              >
+                <span className="toggle-icon">{useGrounding ? '◉' : '○'}</span>
+                <span className="toggle-text">Google Search</span>
               </button>
             </div>
+
+            <div className="config-section">
+              <label className="config-label">SESSION</label>
+              <div className="session-actions">
+                <button 
+                  type="button" 
+                  onClick={handleNewSession} 
+                  className="action-btn"
+                  disabled={current.isGenerating}
+                >
+                  + New
+                </button>
+                {canRegenerate && (
+                  <button 
+                    type="button" 
+                    onClick={handleRegenerate} 
+                    className="action-btn regenerate"
+                    disabled={current.isGenerating}
+                    title="Regenerate with current settings"
+                  >
+                    ↻ Regenerate
+                  </button>
+                )}
+              </div>
+            </div>
+          </>
+        )}
+
+        {activeTab === 'history' && (
+          <div className="history-tab">
+            {sessions.length === 0 ? (
+              <div className="empty-history">
+                <p>No saved sessions yet</p>
+              </div>
+            ) : (
+              <div className="sessions-list">
+                {sessions.map(session => (
+                  <div 
+                    key={session.id} 
+                    className={`session-card ${currentSessionId === session.id ? 'active' : ''}`}
+                    onClick={() => loadSession(session)}
+                  >
+                    {session.thumbnail && (
+                      <div className="session-thumb">
+                        <img src={session.thumbnail} alt="" />
+                      </div>
+                    )}
+                    <div className="session-info">
+                      <div className="session-name">{session.name}</div>
+                      <div className="session-date">
+                        {new Date(session.updatedAt).toLocaleDateString()}
+                      </div>
+                    </div>
+                    <button 
+                      className="delete-session-btn"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        deleteSession(session.id);
+                      }}
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </aside>
@@ -381,7 +527,7 @@ export function Chat() {
               <p>Generate and edit images with multi-turn conversation. Paste images from clipboard (Ctrl+V) or upload reference images.</p>
               <div className="feature-tags">
                 <span className="feature-tag">Paste from Clipboard</span>
-                <span className="feature-tag">Live Thinking</span>
+                <span className="feature-tag">Session History</span>
                 <span className="feature-tag">4K Output</span>
               </div>
             </div>
@@ -395,9 +541,7 @@ export function Chat() {
                     <span className="role-label">YOU</span>
                     <span className="turn-config">{turn.resolution} · {turn.aspectRatio}</span>
                   </div>
-                  {turn.prompt && (
-                    <div className="message-content">{turn.prompt}</div>
-                  )}
+                  {turn.prompt && <div className="message-content">{turn.prompt}</div>}
                   {turn.images && turn.images.length > 0 && (
                     <div className="user-images">
                       {turn.images.map((img, imgIdx) => (
@@ -421,9 +565,7 @@ export function Chat() {
                       <div className="thinking-content-wrap">
                         {turn.thoughts.map((thought, tIdx) => (
                           <div key={tIdx} className="thought-item">
-                            {thought.type === 'thought-text' && (
-                              <pre className="thinking-content">{thought.text}</pre>
-                            )}
+                            {thought.type === 'thought-text' && <pre className="thinking-content">{thought.text}</pre>}
                             {thought.type === 'thought-image' && thought.imageData && (
                               <div className="thought-image-card">
                                 <img src={thought.imageData} alt={`Draft ${tIdx + 1}`} />
@@ -438,9 +580,7 @@ export function Chat() {
 
                   {turn.outputs.map((output, oIdx) => (
                     <div key={oIdx} className="output-item">
-                      {output.type === 'text' && output.text && (
-                        <div className="response-text">{output.text}</div>
-                      )}
+                      {output.type === 'text' && output.text && <div className="response-text">{output.text}</div>}
                       {output.type === 'image' && output.imageData && (
                         <figure className="output-image">
                           <img src={output.imageData} alt={`Generated ${oIdx + 1}`} />
@@ -461,38 +601,11 @@ export function Chat() {
 
           {current.isGenerating && (
             <div className="live-generation">
-              {current.thoughts.length > 0 && (
-                <details className="thinking-details" open>
-                  <summary className="thinking-summary">
-                    <span className="thinking-icon spinning">◐</span>
-                    THINKING ({current.thoughts.length} part{current.thoughts.length > 1 ? 's' : ''})
-                    <span className="live-badge">LIVE</span>
-                  </summary>
-                  <div className="thinking-content-wrap">
-                    {current.thoughts.map((thought, tIdx) => (
-                      <div key={tIdx} className="thought-item">
-                        {thought.type === 'thought-text' && (
-                          <pre className="thinking-content">{thought.text}</pre>
-                        )}
-                        {thought.type === 'thought-image' && thought.imageData && (
-                          <div className="thought-image-card">
-                            <img src={thought.imageData} alt={`Draft ${tIdx + 1}`} />
-                            <span className="thought-badge">Draft {tIdx + 1}</span>
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </details>
-              )}
-
               {current.outputs.length > 0 && (
                 <div className="live-outputs">
                   {current.outputs.map((output, oIdx) => (
                     <div key={oIdx} className="output-item">
-                      {output.type === 'text' && output.text && (
-                        <div className="response-text">{output.text}</div>
-                      )}
+                      {output.type === 'text' && output.text && <div className="response-text">{output.text}</div>}
                       {output.type === 'image' && output.imageData && (
                         <figure className="output-image generating">
                           <img src={output.imageData} alt={`Generated ${oIdx + 1}`} />
@@ -503,11 +616,11 @@ export function Chat() {
                 </div>
               )}
 
-              {current.thoughts.length === 0 && current.outputs.length === 0 && (
+              {current.outputs.length === 0 && (
                 <div className="generating-indicator">
                   <div className="streaming-badge large">
                     <span className="pulse"></span>
-                    {current.phase === 'thinking' ? 'THINKING...' : 'GENERATING...'}
+                    GENERATING...
                   </div>
                 </div>
               )}
@@ -525,7 +638,7 @@ export function Chat() {
         <form onSubmit={handleSubmit} className="prompt-form sticky">
           {lastModelTurn && lastModelTurn.outputs.some(o => o.type === 'image') && (
             <div className="edit-hint">
-              Continue editing the image above, or paste/upload new reference images
+              Continue editing or paste/upload new reference images
             </div>
           )}
 
@@ -581,7 +694,7 @@ export function Chat() {
                 placeholder={uploadedImages.length > 0 
                   ? "Describe what to do with these images..." 
                   : conversation.length > 0 
-                    ? "Describe your edit... (Ctrl+V to paste images)" 
+                    ? "Describe your edit... (Ctrl+V to paste)" 
                     : "Describe your vision or paste images (Ctrl+V)..."}
                 disabled={current.isGenerating}
                 className="prompt-input"
