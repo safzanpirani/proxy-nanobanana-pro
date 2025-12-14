@@ -20,6 +20,7 @@ interface ConversationTurn {
   aspectRatio: AspectRatio;
   resolution: Resolution;
   timestamp: Date;
+  generationTime?: number;
 }
 
 interface SavedSessionMeta {
@@ -29,6 +30,15 @@ interface SavedSessionMeta {
   updatedAt: string;
   thumbnail?: string;
   turnCount: number;
+}
+
+interface ImageLightbox {
+  imageData: string;
+  prompt?: string;
+  resolution: Resolution;
+  aspectRatio: AspectRatio;
+  generationTime?: number;
+  timestamp: Date;
 }
 
 const STORAGE_KEY = 'gemini-sessions-meta';
@@ -155,7 +165,7 @@ function loadSession(id: string): ConversationTurn[] | null {
   }
 }
 
-function saveSession(id: string, conversation: ConversationTurn[]) {
+function saveSession(id: string, conversation: ConversationTurn[]): ConversationTurn[] {
   try {
     const forStorage = conversation.map(turn => ({
       ...turn,
@@ -163,30 +173,43 @@ function saveSession(id: string, conversation: ConversationTurn[]) {
       images: turn.images?.map(img => {
         if (img.dataUrl && !img.storageId) {
           const storageId = storeImage(img.dataUrl);
-          return { ...img, dataUrl: '', storageId };
+          return { ...img, storageId: storageId || img.storageId };
         }
-        return { ...img, dataUrl: '' };
+        return img;
       }),
       // Store generated images and save IDs
       outputs: turn.outputs.map(o => {
         if (o.type === 'image' && o.imageData && !o.storageId) {
           const storageId = storeImage(o.imageData);
-          return { ...o, imageData: '', storageId };
+          return { ...o, storageId: storageId || o.storageId };
         }
-        return o.type === 'image' ? { ...o, imageData: '' } : o;
+        return o;
       }),
       // Store thought images and save IDs
       thoughts: turn.thoughts.map(t => {
         if (t.type === 'thought-image' && t.imageData && !t.storageId) {
           const storageId = storeImage(t.imageData);
-          return { ...t, imageData: '', storageId };
+          return { ...t, storageId: storageId || t.storageId };
         }
-        return t.type === 'thought-image' ? { ...t, imageData: '' } : t;
+        return t;
       }),
     }));
-    localStorage.setItem(SESSION_PREFIX + id, JSON.stringify(forStorage));
+
+    // Save with empty image data but keep storageIds
+    const toSave = forStorage.map(turn => ({
+      ...turn,
+      images: turn.images?.map(img => ({ ...img, dataUrl: '' })),
+      outputs: turn.outputs.map(o => o.type === 'image' ? { ...o, imageData: '' } : o),
+      thoughts: turn.thoughts.map(t => t.type === 'thought-image' ? { ...t, imageData: '' } : t),
+    }));
+
+    localStorage.setItem(SESSION_PREFIX + id, JSON.stringify(toSave));
+    
+    // Return updated conversation with storageIds (keeping image data)
+    return forStorage;
   } catch (e) {
     console.warn('Failed to save session:', e);
+    return conversation;
   }
 }
 
@@ -216,6 +239,7 @@ export function Chat() {
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [lastPrompt, setLastPrompt] = useState<string>('');
   const [lastImages, setLastImages] = useState<UploadedImage[]>([]);
+  const [lightbox, setLightbox] = useState<ImageLightbox | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -261,7 +285,22 @@ export function Chat() {
           return newSessions;
         });
 
-        saveSession(currentSessionId, conversation);
+        // Save and get updated conversation with storageIds
+        const updatedConversation = saveSession(currentSessionId, conversation);
+        
+        // Update conversation state with storageIds if any were added
+        const hasNewStorageIds = updatedConversation.some((turn, idx) => {
+          const original = conversation[idx];
+          if (!original) return false;
+          const hasNewImageId = turn.images?.some((img, i) => img.storageId && !original.images?.[i]?.storageId);
+          const hasNewOutputId = turn.outputs.some((o, i) => o.storageId && !original.outputs[i]?.storageId);
+          const hasNewThoughtId = turn.thoughts.some((t, i) => t.storageId && !original.thoughts[i]?.storageId);
+          return hasNewImageId || hasNewOutputId || hasNewThoughtId;
+        });
+        
+        if (hasNewStorageIds) {
+          setConversation(updatedConversation);
+        }
       })();
     }
   }, [conversation, currentSessionId]);
@@ -442,6 +481,7 @@ export function Chat() {
         aspectRatio,
         resolution,
         timestamp: new Date(),
+        generationTime: endTime - startTime,
       }]);
 
       const modelParts = parts.map(p => {
@@ -746,22 +786,43 @@ export function Chat() {
                     </details>
                   )}
 
-                  {turn.outputs.map((output, oIdx) => (
-                    <div key={oIdx} className="output-item">
-                      {output.type === 'text' && output.text && <div className="response-text">{output.text}</div>}
-                      {output.type === 'image' && output.imageData && (
-                        <figure className="output-image">
-                          <img src={output.imageData} alt={`Generated ${oIdx + 1}`} />
-                          <figcaption>
-                            <span className="image-meta">{turn.resolution} · {turn.aspectRatio}</span>
-                            <a href={output.imageData} download={`gemini-${turn.resolution}-${turn.aspectRatio.replace(':', 'x')}-${Date.now()}.png`}>
-                              ↓ Download
-                            </a>
-                          </figcaption>
-                        </figure>
-                      )}
-                    </div>
-                  ))}
+                  {turn.outputs.map((output, oIdx) => {
+                    // Find the user prompt that generated this image
+                    const userTurnIdx = conversation.slice(0, idx).reverse().findIndex(t => t.role === 'user');
+                    const userTurn = userTurnIdx !== -1 ? conversation[idx - 1 - userTurnIdx] : undefined;
+                    const prompt = userTurn?.prompt;
+                    
+                    return (
+                      <div key={oIdx} className="output-item">
+                        {output.type === 'text' && output.text && <div className="response-text">{output.text}</div>}
+                        {output.type === 'image' && output.imageData && (
+                          <figure 
+                            className="output-image clickable"
+                            onClick={() => setLightbox({
+                              imageData: output.imageData!,
+                              prompt,
+                              resolution: turn.resolution,
+                              aspectRatio: turn.aspectRatio,
+                              generationTime: turn.generationTime,
+                              timestamp: turn.timestamp,
+                            })}
+                          >
+                            <img src={output.imageData} alt={`Generated ${oIdx + 1}`} />
+                            <figcaption>
+                              <span className="image-meta">{turn.resolution} · {turn.aspectRatio}</span>
+                              <a 
+                                href={output.imageData} 
+                                download={`gemini-${turn.resolution}-${turn.aspectRatio.replace(':', 'x')}-${Date.now()}.png`}
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                ↓ Download
+                              </a>
+                            </figcaption>
+                          </figure>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -860,6 +921,53 @@ export function Chat() {
           )}
         </form>
       </main>
+
+      {/* Image Lightbox Modal */}
+      {lightbox && (
+        <div className="lightbox-overlay" onClick={() => setLightbox(null)}>
+          <div className="lightbox-content" onClick={(e) => e.stopPropagation()}>
+            <button className="lightbox-close" onClick={() => setLightbox(null)}>×</button>
+            <div className="lightbox-image-wrap">
+              <img src={lightbox.imageData} alt="Full size" />
+            </div>
+            <div className="lightbox-info">
+              {lightbox.prompt && (
+                <div className="lightbox-prompt">
+                  <span className="lightbox-label">PROMPT</span>
+                  <p>{lightbox.prompt}</p>
+                </div>
+              )}
+              <div className="lightbox-stats">
+                <div className="stat">
+                  <span className="stat-label">Resolution</span>
+                  <span className="stat-value">{lightbox.resolution}</span>
+                </div>
+                <div className="stat">
+                  <span className="stat-label">Aspect Ratio</span>
+                  <span className="stat-value">{lightbox.aspectRatio}</span>
+                </div>
+                {lightbox.generationTime && (
+                  <div className="stat">
+                    <span className="stat-label">Gen Time</span>
+                    <span className="stat-value">{(lightbox.generationTime / 1000).toFixed(1)}s</span>
+                  </div>
+                )}
+                <div className="stat">
+                  <span className="stat-label">Created</span>
+                  <span className="stat-value">{lightbox.timestamp.toLocaleString()}</span>
+                </div>
+              </div>
+              <a 
+                href={lightbox.imageData} 
+                download={`gemini-${lightbox.resolution}-${lightbox.aspectRatio.replace(':', 'x')}-${Date.now()}.png`}
+                className="lightbox-download"
+              >
+                ↓ Download Full Size
+              </a>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
