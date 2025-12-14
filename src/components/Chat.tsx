@@ -226,6 +226,7 @@ export function Chat() {
   });
   
   const [activeTab, setActiveTab] = useState<'config' | 'history'>('config');
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sessions, setSessions] = useState<SavedSessionMeta[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [lastPrompt, setLastPrompt] = useState<string>('');
@@ -340,6 +341,54 @@ export function Chat() {
           if (img) newImages.push(img);
         }
       }
+    }
+
+    if (newImages.length > 0) {
+      setUploadedImages(prev => [...prev, ...newImages].slice(0, 14));
+    }
+  }
+
+  const [isDragging, setIsDragging] = useState(false);
+
+  function handleDragOver(e: React.DragEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+  }
+
+  function handleDragEnter(e: React.DragEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.dataTransfer?.types.includes('Files')) {
+      setIsDragging(true);
+    }
+  }
+
+  function handleDragLeave(e: React.DragEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const x = e.clientX;
+    const y = e.clientY;
+    if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) {
+      setIsDragging(false);
+    }
+  }
+
+  async function handleDrop(e: React.DragEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+
+    const files = e.dataTransfer?.files;
+    if (!files || files.length === 0) return;
+
+    const newImages: UploadedImage[] = [];
+
+    for (const file of Array.from(files)) {
+      if (!file.type.startsWith('image/')) continue;
+      if (uploadedImages.length + newImages.length >= 14) break;
+      const img = await addImageFromFile(file);
+      if (img) newImages.push(img);
     }
 
     if (newImages.length > 0) {
@@ -585,7 +634,22 @@ export function Chat() {
 
   return (
     <div className="studio">
-      <aside className="sidebar">
+      {/* Mobile menu toggle */}
+      <button 
+        className="mobile-menu-toggle"
+        onClick={() => setSidebarOpen(!sidebarOpen)}
+        aria-label="Toggle menu"
+      >
+        {sidebarOpen ? '✕' : '☰'}
+      </button>
+      
+      {/* Sidebar overlay for mobile */}
+      <div 
+        className={`sidebar-overlay ${sidebarOpen ? 'visible' : ''}`}
+        onClick={() => setSidebarOpen(false)}
+      />
+      
+      <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
         <div className="brand">
           <div className="brand-icon">◇</div>
           <div className="brand-text">
@@ -694,7 +758,10 @@ export function Chat() {
                   <div 
                     key={session.id} 
                     className={`session-card ${currentSessionId === session.id ? 'active' : ''}`}
-                    onClick={() => handleLoadSession(session)}
+                    onClick={() => {
+                      handleLoadSession(session);
+                      setSidebarOpen(false);
+                    }}
                   >
                     {session.thumbnail && (
                       <div className="session-thumb">
@@ -724,14 +791,32 @@ export function Chat() {
         )}
       </aside>
 
-      <main className="workspace">
+      <main 
+        className={`workspace ${isDragging ? 'drag-active' : ''}`}
+        onDragOver={handleDragOver}
+        onDragEnter={handleDragEnter}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+      >
+        {/* Drag overlay */}
+        {isDragging && (
+          <div className="drag-overlay">
+            <div className="drag-overlay-content">
+              <span className="drag-icon">📷</span>
+              <span className="drag-text">Drop images here</span>
+              <span className="drag-hint">Up to {14 - uploadedImages.length} more images</span>
+            </div>
+          </div>
+        )}
+        
         <div className="conversation-area" ref={outputRef}>
           {conversation.length === 0 && current.phase === 'idle' && (
             <div className="empty-state">
               <div className="empty-icon">◈</div>
               <h2>Gemini 3 Pro Image</h2>
-              <p>Generate and edit images with multi-turn conversation. Paste images from clipboard (Ctrl+V) or upload reference images.</p>
+              <p>Generate and edit images with multi-turn conversation. Drag & drop, paste (Ctrl+V), or upload reference images.</p>
               <div className="feature-tags">
+                <span className="feature-tag">Drag & Drop</span>
                 <span className="feature-tag">Paste from Clipboard</span>
                 <span className="feature-tag">Session History</span>
                 <span className="feature-tag">4K Output</span>
