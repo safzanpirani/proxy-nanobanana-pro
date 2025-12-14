@@ -234,6 +234,7 @@ export function Chat() {
   const [aspectRatio, setAspectRatio] = useState<AspectRatio>('1:1');
   const [resolution, setResolution] = useState<Resolution>('1K');
   const [useGrounding, setUseGrounding] = useState(false);
+  const [bulkCount, setBulkCount] = useState<1 | 2 | 4 | 8>(1);
   const [conversation, setConversation] = useState<ConversationTurn[]>([]);
   const [conversationHistory, setConversationHistory] = useState<Content[]>([]);
   const [current, setCurrent] = useState<GenerationState>({
@@ -242,6 +243,16 @@ export function Chat() {
     isGenerating: false,
     phase: 'idle',
   });
+  
+  // Bulk generation state
+  const [bulkResults, setBulkResults] = useState<Array<{
+    id: string;
+    status: 'pending' | 'generating' | 'done' | 'error';
+    outputs: OutputPart[];
+    thoughts: ThoughtPart[];
+    error?: string;
+    generationTime?: number;
+  }>>([]);
   
   const [activeTab, setActiveTab] = useState<'config' | 'history'>('config');
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -635,6 +646,245 @@ export function Chat() {
     }
   }
 
+  // Single request for bulk generation (doesn't update conversation, just returns result)
+  async function generateSingleRequest(
+    prompt: string,
+    images: UploadedImage[],
+    requestId: string,
+    effectiveAspectRatio: AspectRatio,
+    effectiveResolution: Resolution
+  ): Promise<{
+    id: string;
+    outputs: OutputPart[];
+    thoughts: ThoughtPart[];
+    error?: string;
+    generationTime: number;
+  }> {
+    const startTime = Date.now();
+    
+    try {
+      const userParts: Part[] = [];
+      if (prompt) userParts.push({ text: prompt });
+      for (const img of images) {
+        const base64 = img.dataUrl.split(',')[1];
+        userParts.push(createImagePart(base64, img.mimeType));
+      }
+
+      const contents: Content[] = [...conversationHistory, { role: 'user', parts: userParts }];
+
+      const response = await client.models.generateContent({
+        model: MODEL_ID,
+        contents,
+        config: {
+          responseModalities: [Modality.TEXT, Modality.IMAGE],
+          imageConfig: {
+            aspectRatio: effectiveAspectRatio,
+            imageSize: effectiveResolution,
+          },
+          ...(useGrounding ? { tools: [{ googleSearch: {} }] } : {}),
+        },
+      });
+
+      const parts = response.candidates?.[0]?.content?.parts || [];
+      const collectedThoughts: ThoughtPart[] = [];
+      const collectedOutputs: OutputPart[] = [];
+
+      for (const part of parts) {
+        const rawPart = part as Record<string, unknown>;
+        const isThought = rawPart.thought === true;
+
+        if (part.text) {
+          if (isThought) {
+            collectedThoughts.push({ type: 'thought-text', text: part.text });
+          } else {
+            collectedOutputs.push({ 
+              type: 'text', 
+              text: part.text, 
+              signature: rawPart.thoughtSignature as string 
+            });
+          }
+        } else if (part.inlineData) {
+          const mimeType = part.inlineData.mimeType || 'image/png';
+          const data = part.inlineData.data;
+
+          if (isThought) {
+            collectedThoughts.push({ 
+              type: 'thought-image', 
+              imageData: `data:${mimeType};base64,${data}`, 
+              mimeType 
+            });
+          } else {
+            collectedOutputs.push({ 
+              type: 'image', 
+              imageData: `data:${mimeType};base64,${data}`, 
+              mimeType, 
+              signature: rawPart.thoughtSignature as string 
+            });
+          }
+        }
+      }
+
+      return {
+        id: requestId,
+        outputs: collectedOutputs,
+        thoughts: collectedThoughts,
+        generationTime: Date.now() - startTime,
+      };
+    } catch (error) {
+      return {
+        id: requestId,
+        outputs: [],
+        thoughts: [],
+        error: error instanceof Error ? error.message : 'Unknown error',
+        generationTime: Date.now() - startTime,
+      };
+    }
+  }
+
+  // Bulk generation - fires multiple parallel requests
+  async function generateBulk(prompt: string, images: UploadedImage[]) {
+    if (current.isGenerating) return;
+
+    const startTime = Date.now();
+
+    if (!currentSessionId) {
+      setCurrentSessionId(`${Date.now()}`);
+    }
+
+    // Add user turn to conversation
+    setConversation(prev => [...prev, {
+      role: 'user',
+      prompt: prompt || undefined,
+      images: images.length > 0 ? images : undefined,
+      thoughts: [],
+      outputs: [],
+      aspectRatio,
+      resolution,
+      timestamp: new Date(),
+    }]);
+
+    setCurrent({
+      thoughts: [],
+      outputs: [],
+      isGenerating: true,
+      phase: 'generating',
+      startTime,
+    });
+
+    setLastPrompt(prompt);
+    setLastImages(images);
+
+    // Initialize bulk results
+    const initialResults = Array.from({ length: bulkCount }, (_, i) => ({
+      id: `bulk-${Date.now()}-${i}`,
+      status: 'pending' as const,
+      outputs: [] as OutputPart[],
+      thoughts: [] as ThoughtPart[],
+    }));
+    setBulkResults(initialResults);
+
+    // Fire all requests in parallel
+    const promises = initialResults.map(async (result) => {
+      // Update status to generating
+      setBulkResults(prev => prev.map(r => 
+        r.id === result.id ? { ...r, status: 'generating' as const } : r
+      ));
+
+      const response = await generateSingleRequest(
+        prompt,
+        images,
+        result.id,
+        aspectRatio,
+        resolution
+      );
+
+      // Update with result
+      setBulkResults(prev => prev.map(r => 
+        r.id === result.id ? {
+          ...r,
+          status: response.error ? 'error' as const : 'done' as const,
+          outputs: response.outputs,
+          thoughts: response.thoughts,
+          error: response.error,
+          generationTime: response.generationTime,
+        } : r
+      ));
+
+      return response;
+    });
+
+    // Wait for all to complete
+    const results = await Promise.all(promises);
+    
+    // Use the first successful result for the conversation
+    const firstSuccess = results.find(r => !r.error && r.outputs.length > 0);
+    
+    if (firstSuccess) {
+      const endTime = Date.now();
+      
+      // Collect ALL outputs from ALL successful results
+      const allOutputs = results
+        .filter(r => !r.error)
+        .flatMap(r => r.outputs);
+      
+      const allThoughts = results
+        .filter(r => !r.error)
+        .flatMap(r => r.thoughts);
+
+      setConversation(prev => [...prev, {
+        role: 'model',
+        thoughts: allThoughts,
+        outputs: allOutputs,
+        aspectRatio,
+        resolution,
+        timestamp: new Date(),
+        generationTime: endTime - startTime,
+      }]);
+
+      // Build history from first successful result (for multi-turn)
+      const userParts: Part[] = [];
+      if (prompt) userParts.push({ text: prompt });
+      for (const img of images) {
+        const base64 = img.dataUrl.split(',')[1];
+        userParts.push(createImagePart(base64, img.mimeType));
+      }
+
+      const modelParts: Part[] = [];
+      for (const output of firstSuccess.outputs) {
+        if (output.type === 'text' && output.text) {
+          const textPart: Record<string, unknown> = { text: output.text };
+          if (output.signature) textPart.thoughtSignature = output.signature;
+          modelParts.push(textPart as Part);
+        } else if (output.type === 'image' && output.imageData) {
+          const base64 = output.imageData.split(',')[1];
+          const imagePart: Record<string, unknown> = {
+            inlineData: { mimeType: output.mimeType || 'image/png', data: base64 }
+          };
+          if (output.signature) imagePart.thoughtSignature = output.signature;
+          modelParts.push(imagePart as Part);
+        }
+      }
+
+      setConversationHistory(prev => [
+        ...prev,
+        { role: 'user', parts: userParts },
+        { role: 'model', parts: modelParts }
+      ]);
+    }
+
+    setCurrent({
+      thoughts: [],
+      outputs: [],
+      isGenerating: false,
+      phase: 'done',
+      startTime,
+      endTime: Date.now(),
+    });
+
+    // Clear bulk results after a delay
+    setTimeout(() => setBulkResults([]), 500);
+  }
+
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     if ((!input.trim() && uploadedImages.length === 0) || current.isGenerating) return;
@@ -644,7 +894,11 @@ export function Chat() {
     setInput('');
     setUploadedImages([]);
     
-    await generateWithParams(prompt, images, true);
+    if (bulkCount > 1) {
+      await generateBulk(prompt, images);
+    } else {
+      await generateWithParams(prompt, images, true);
+    }
   }
 
   async function handleRegenerate(turnIdx?: number) {
@@ -1202,6 +1456,23 @@ export function Chat() {
             </div>
 
             <div className="config-section">
+              <label className="config-label">BULK GENERATE</label>
+              <div className="bulk-btns">
+                {([1, 2, 4, 8] as const).map(count => (
+                  <button
+                    key={count}
+                    type="button"
+                    onClick={() => setBulkCount(count)}
+                    className={`bulk-btn ${bulkCount === count ? 'active' : ''}`}
+                    disabled={current.isGenerating}
+                  >
+                    ×{count}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="config-section">
               <label className="config-label">SESSION</label>
               <div className="session-actions">
                 <button 
@@ -1540,10 +1811,40 @@ export function Chat() {
 
           {current.isGenerating && (
             <div className="generating-indicator">
-              <div className="streaming-badge large">
-                <span className="pulse"></span>
-                GENERATING...
-              </div>
+              {bulkResults.length > 0 ? (
+                <div className="bulk-progress">
+                  <div className="bulk-progress-header">
+                    <span className="pulse"></span>
+                    GENERATING {bulkResults.filter(r => r.status === 'done').length}/{bulkResults.length}
+                  </div>
+                  <div className="bulk-progress-grid">
+                    {bulkResults.map((result, idx) => (
+                      <div 
+                        key={result.id} 
+                        className={`bulk-slot ${result.status}`}
+                      >
+                        {result.status === 'pending' && <span className="slot-icon">◯</span>}
+                        {result.status === 'generating' && <span className="slot-icon spinning">◐</span>}
+                        {result.status === 'done' && result.outputs.find(o => o.type === 'image') ? (
+                          <img 
+                            src={result.outputs.find(o => o.type === 'image')?.imageData} 
+                            alt={`Result ${idx + 1}`} 
+                          />
+                        ) : result.status === 'done' ? (
+                          <span className="slot-icon">✓</span>
+                        ) : null}
+                        {result.status === 'error' && <span className="slot-icon error">✕</span>}
+                        <span className="slot-label">#{idx + 1}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="streaming-badge large">
+                  <span className="pulse"></span>
+                  GENERATING...
+                </div>
+              )}
             </div>
           )}
 
