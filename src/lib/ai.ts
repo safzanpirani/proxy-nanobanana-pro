@@ -37,6 +37,7 @@ export interface ThoughtPart {
   text?: string;
   imageData?: string;
   mimeType?: string;
+  storageId?: string | null;
 }
 
 export interface OutputPart {
@@ -45,6 +46,7 @@ export interface OutputPart {
   imageData?: string;
   mimeType?: string;
   signature?: string;
+  storageId?: string | null;
 }
 
 export interface ParsedResponse {
@@ -58,6 +60,7 @@ export interface UploadedImage {
   dataUrl: string;
   mimeType: string;
   name: string;
+  storageId?: string | null;
 }
 
 export function parseResponseParts(parts: Part[]): ParsedResponse {

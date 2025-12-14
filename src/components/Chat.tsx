@@ -22,18 +22,87 @@ interface ConversationTurn {
   timestamp: Date;
 }
 
-interface SavedSession {
+interface SavedSessionMeta {
   id: string;
   name: string;
-  conversation: ConversationTurn[];
   createdAt: string;
   updatedAt: string;
   thumbnail?: string;
+  turnCount: number;
 }
 
-const STORAGE_KEY = 'gemini-sessions';
+const STORAGE_KEY = 'gemini-sessions-meta';
+const SESSION_PREFIX = 'gemini-session-';
+const IMAGE_PREFIX = 'gemini-img-';
+const THUMBNAIL_SIZE = 80;
+const MAX_STORED_IMAGES = 50;
 
-function loadSessions(): SavedSession[] {
+async function resizeImageToThumbnail(dataUrl: string): Promise<string> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d')!;
+      
+      const ratio = Math.min(THUMBNAIL_SIZE / img.width, THUMBNAIL_SIZE / img.height);
+      canvas.width = Math.round(img.width * ratio);
+      canvas.height = Math.round(img.height * ratio);
+      
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      
+      if (canvas.toDataURL('image/webp').startsWith('data:image/webp')) {
+        resolve(canvas.toDataURL('image/webp', 0.8));
+      } else {
+        resolve(canvas.toDataURL('image/jpeg', 0.7));
+      }
+    };
+    img.onerror = () => resolve('');
+    img.src = dataUrl;
+  });
+}
+
+function generateImageId(): string {
+  return `img-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function storeImage(imageData: string): string | null {
+  const id = generateImageId();
+  try {
+    localStorage.setItem(IMAGE_PREFIX + id, imageData);
+    pruneOldImages();
+    return id;
+  } catch {
+    return null;
+  }
+}
+
+function loadImage(id: string): string | null {
+  try {
+    return localStorage.getItem(IMAGE_PREFIX + id);
+  } catch {
+    return null;
+  }
+}
+
+function pruneOldImages() {
+  try {
+    const imageKeys: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key?.startsWith(IMAGE_PREFIX)) {
+        imageKeys.push(key);
+      }
+    }
+    
+    if (imageKeys.length > MAX_STORED_IMAGES) {
+      imageKeys.sort();
+      const toRemove = imageKeys.slice(0, imageKeys.length - MAX_STORED_IMAGES);
+      toRemove.forEach(key => localStorage.removeItem(key));
+    }
+  } catch {}
+}
+
+function loadSessionsMeta(): SavedSessionMeta[] {
   try {
     const data = localStorage.getItem(STORAGE_KEY);
     return data ? JSON.parse(data) : [];
@@ -42,8 +111,89 @@ function loadSessions(): SavedSession[] {
   }
 }
 
-function saveSessions(sessions: SavedSession[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions));
+function saveSessionsMeta(sessions: SavedSessionMeta[]) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions));
+  } catch (e) {
+    console.warn('Failed to save sessions meta:', e);
+  }
+}
+
+function loadSession(id: string): ConversationTurn[] | null {
+  try {
+    const data = localStorage.getItem(SESSION_PREFIX + id);
+    if (!data) return null;
+    const turns: ConversationTurn[] = JSON.parse(data);
+    
+    // Restore images from separate storage
+    return turns.map(turn => ({
+      ...turn,
+      images: turn.images?.map(img => {
+        if (img.storageId) {
+          const restored = loadImage(img.storageId);
+          return { ...img, dataUrl: restored || '' };
+        }
+        return img;
+      }),
+      outputs: turn.outputs.map(o => {
+        if (o.type === 'image' && o.storageId) {
+          const restored = loadImage(o.storageId);
+          return { ...o, imageData: restored || '' };
+        }
+        return o;
+      }),
+      thoughts: turn.thoughts.map(t => {
+        if (t.type === 'thought-image' && t.storageId) {
+          const restored = loadImage(t.storageId);
+          return { ...t, imageData: restored || '' };
+        }
+        return t;
+      }),
+    }));
+  } catch {
+    return null;
+  }
+}
+
+function saveSession(id: string, conversation: ConversationTurn[]) {
+  try {
+    const forStorage = conversation.map(turn => ({
+      ...turn,
+      // Store user-uploaded images and save IDs
+      images: turn.images?.map(img => {
+        if (img.dataUrl && !img.storageId) {
+          const storageId = storeImage(img.dataUrl);
+          return { ...img, dataUrl: '', storageId };
+        }
+        return { ...img, dataUrl: '' };
+      }),
+      // Store generated images and save IDs
+      outputs: turn.outputs.map(o => {
+        if (o.type === 'image' && o.imageData && !o.storageId) {
+          const storageId = storeImage(o.imageData);
+          return { ...o, imageData: '', storageId };
+        }
+        return o.type === 'image' ? { ...o, imageData: '' } : o;
+      }),
+      // Store thought images and save IDs
+      thoughts: turn.thoughts.map(t => {
+        if (t.type === 'thought-image' && t.imageData && !t.storageId) {
+          const storageId = storeImage(t.imageData);
+          return { ...t, imageData: '', storageId };
+        }
+        return t.type === 'thought-image' ? { ...t, imageData: '' } : t;
+      }),
+    }));
+    localStorage.setItem(SESSION_PREFIX + id, JSON.stringify(forStorage));
+  } catch (e) {
+    console.warn('Failed to save session:', e);
+  }
+}
+
+function deleteSessionData(id: string) {
+  try {
+    localStorage.removeItem(SESSION_PREFIX + id);
+  } catch {}
 }
 
 export function Chat() {
@@ -62,7 +212,7 @@ export function Chat() {
   });
   
   const [activeTab, setActiveTab] = useState<'config' | 'history'>('config');
-  const [sessions, setSessions] = useState<SavedSession[]>([]);
+  const [sessions, setSessions] = useState<SavedSessionMeta[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [lastPrompt, setLastPrompt] = useState<string>('');
   const [lastImages, setLastImages] = useState<UploadedImage[]>([]);
@@ -72,7 +222,7 @@ export function Chat() {
   const outputRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    setSessions(loadSessions());
+    setSessions(loadSessionsMeta());
   }, []);
 
   useEffect(() => {
@@ -83,31 +233,36 @@ export function Chat() {
 
   useEffect(() => {
     if (currentSessionId && conversation.length > 0) {
-      const thumbnail = conversation
-        .filter(t => t.role === 'model')
-        .flatMap(t => t.outputs)
-        .find(o => o.type === 'image')?.imageData;
-      
-      const firstPrompt = conversation.find(t => t.role === 'user')?.prompt || 'Untitled';
-      
-      setSessions(prev => {
-        const existing = prev.find(s => s.id === currentSessionId);
-        const updated: SavedSession = {
-          id: currentSessionId,
-          name: firstPrompt.slice(0, 50),
-          conversation,
-          createdAt: existing?.createdAt || new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-          thumbnail,
-        };
+      (async () => {
+        const firstImage = conversation
+          .filter(t => t.role === 'model')
+          .flatMap(t => t.outputs)
+          .find(o => o.type === 'image' && o.imageData)?.imageData;
         
-        const newSessions = existing 
-          ? prev.map(s => s.id === currentSessionId ? updated : s)
-          : [updated, ...prev];
+        const thumbnail = firstImage ? await resizeImageToThumbnail(firstImage) : undefined;
+        const firstPrompt = conversation.find(t => t.role === 'user')?.prompt || 'Untitled';
         
-        saveSessions(newSessions);
-        return newSessions;
-      });
+        setSessions(prev => {
+          const existing = prev.find(s => s.id === currentSessionId);
+          const updated: SavedSessionMeta = {
+            id: currentSessionId,
+            name: firstPrompt.slice(0, 50),
+            createdAt: existing?.createdAt || new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            thumbnail,
+            turnCount: Math.ceil(conversation.length / 2),
+          };
+          
+          const newSessions = existing 
+            ? prev.map(s => s.id === currentSessionId ? updated : s)
+            : [updated, ...prev];
+          
+          saveSessionsMeta(newSessions);
+          return newSessions;
+        });
+
+        saveSession(currentSessionId, conversation);
+      })();
     }
   }, [conversation, currentSessionId]);
 
@@ -194,7 +349,7 @@ export function Chat() {
       thoughts: [],
       outputs: [],
       isGenerating: true,
-      phase: 'thinking',
+      phase: 'generating',
       startTime,
     });
 
@@ -217,7 +372,7 @@ export function Chat() {
         ? [...conversationHistory, { role: 'user', parts: userParts }]
         : [{ role: 'user', parts: userParts }];
 
-      const streamResponse = await client.models.generateContentStream({
+      const response = await client.models.generateContent({
         model: MODEL_ID,
         contents,
         config: {
@@ -230,42 +385,46 @@ export function Chat() {
         },
       });
 
+      const endTime = Date.now();
+      const parts = response.candidates?.[0]?.content?.parts || [];
+      
       const collectedThoughts: ThoughtPart[] = [];
       const collectedOutputs: OutputPart[] = [];
-      const allParts: Part[] = [];
 
-      for await (const chunk of streamResponse) {
-        const parts = chunk.candidates?.[0]?.content?.parts || [];
-        
-        for (const part of parts) {
-          allParts.push(part);
-          const rawPart = part as Record<string, unknown>;
-          const isThought = rawPart.thought === true;
+      for (const part of parts) {
+        const rawPart = part as Record<string, unknown>;
+        const isThought = rawPart.thought === true;
 
-          if (part.text) {
-            if (isThought) {
-              collectedThoughts.push({ type: 'thought-text', text: part.text });
-              setCurrent(prev => ({ ...prev, thoughts: [...collectedThoughts], phase: 'thinking' }));
-            } else {
-              collectedOutputs.push({ type: 'text', text: part.text, signature: rawPart.thoughtSignature as string });
-              setCurrent(prev => ({ ...prev, outputs: [...collectedOutputs], phase: 'generating' }));
-            }
-          } else if (part.inlineData) {
-            const mimeType = part.inlineData.mimeType || 'image/png';
-            const data = part.inlineData.data;
+        if (part.text) {
+          if (isThought) {
+            collectedThoughts.push({ type: 'thought-text', text: part.text });
+          } else {
+            collectedOutputs.push({ 
+              type: 'text', 
+              text: part.text, 
+              signature: rawPart.thoughtSignature as string 
+            });
+          }
+        } else if (part.inlineData) {
+          const mimeType = part.inlineData.mimeType || 'image/png';
+          const data = part.inlineData.data;
 
-            if (isThought) {
-              collectedThoughts.push({ type: 'thought-image', imageData: `data:${mimeType};base64,${data}`, mimeType });
-              setCurrent(prev => ({ ...prev, thoughts: [...collectedThoughts], phase: 'thinking' }));
-            } else {
-              collectedOutputs.push({ type: 'image', imageData: `data:${mimeType};base64,${data}`, mimeType, signature: rawPart.thoughtSignature as string });
-              setCurrent(prev => ({ ...prev, outputs: [...collectedOutputs], phase: 'generating' }));
-            }
+          if (isThought) {
+            collectedThoughts.push({ 
+              type: 'thought-image', 
+              imageData: `data:${mimeType};base64,${data}`, 
+              mimeType 
+            });
+          } else {
+            collectedOutputs.push({ 
+              type: 'image', 
+              imageData: `data:${mimeType};base64,${data}`, 
+              mimeType, 
+              signature: rawPart.thoughtSignature as string 
+            });
           }
         }
       }
-
-      const endTime = Date.now();
 
       setCurrent({
         thoughts: collectedThoughts,
@@ -285,12 +444,20 @@ export function Chat() {
         timestamp: new Date(),
       }]);
 
-      const modelContent: Content = {
-        role: 'model',
-        parts: allParts.filter(p => (p as Record<string, unknown>).thought !== true),
-      };
+      const modelParts = parts.map(p => {
+        const raw = p as Record<string, unknown>;
+        if (raw.thought === true) return null;
+        if (raw.thoughtSignature) {
+          return { ...p, thoughtSignature: raw.thoughtSignature };
+        }
+        return p;
+      }).filter(Boolean) as Part[];
 
-      setConversationHistory(prev => [...prev, { role: 'user', parts: userParts }, modelContent]);
+      setConversationHistory(prev => [
+        ...prev, 
+        { role: 'user', parts: userParts }, 
+        { role: 'model', parts: modelParts }
+      ]);
 
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -336,21 +503,22 @@ export function Chat() {
     });
   }
 
-  function loadSession(session: SavedSession) {
-    setConversation(session.conversation.map(t => ({
-      ...t,
-      timestamp: new Date(t.timestamp),
-    })));
-    setCurrentSessionId(session.id);
-    setConversationHistory([]);
-    setCurrent({ thoughts: [], outputs: [], isGenerating: false, phase: 'idle' });
-    setActiveTab('config');
+  function handleLoadSession(session: SavedSessionMeta) {
+    const data = loadSession(session.id);
+    if (data) {
+      setConversation(data.map(t => ({ ...t, timestamp: new Date(t.timestamp) })));
+      setCurrentSessionId(session.id);
+      setConversationHistory([]);
+      setCurrent({ thoughts: [], outputs: [], isGenerating: false, phase: 'idle' });
+      setActiveTab('config');
+    }
   }
 
-  function deleteSession(id: string) {
+  function handleDeleteSession(id: string) {
+    deleteSessionData(id);
     setSessions(prev => {
       const newSessions = prev.filter(s => s.id !== id);
-      saveSessions(newSessions);
+      saveSessionsMeta(newSessions);
       return newSessions;
     });
     if (currentSessionId === id) {
@@ -468,7 +636,7 @@ export function Chat() {
                     disabled={current.isGenerating}
                     title="Regenerate with current settings"
                   >
-                    ↻ Regenerate
+                    ↻ Regen
                   </button>
                 )}
               </div>
@@ -488,7 +656,7 @@ export function Chat() {
                   <div 
                     key={session.id} 
                     className={`session-card ${currentSessionId === session.id ? 'active' : ''}`}
-                    onClick={() => loadSession(session)}
+                    onClick={() => handleLoadSession(session)}
                   >
                     {session.thumbnail && (
                       <div className="session-thumb">
@@ -498,14 +666,14 @@ export function Chat() {
                     <div className="session-info">
                       <div className="session-name">{session.name}</div>
                       <div className="session-date">
-                        {new Date(session.updatedAt).toLocaleDateString()}
+                        {session.turnCount} turn{session.turnCount > 1 ? 's' : ''} · {new Date(session.updatedAt).toLocaleDateString()}
                       </div>
                     </div>
                     <button 
                       className="delete-session-btn"
                       onClick={(e) => {
                         e.stopPropagation();
-                        deleteSession(session.id);
+                        handleDeleteSession(session.id);
                       }}
                     >
                       ×
@@ -546,7 +714,7 @@ export function Chat() {
                     <div className="user-images">
                       {turn.images.map((img, imgIdx) => (
                         <div key={imgIdx} className="user-image-thumb">
-                          <img src={img.dataUrl} alt={img.name} />
+                          {img.dataUrl && <img src={img.dataUrl} alt={img.name} />}
                         </div>
                       ))}
                     </div>
@@ -600,30 +768,11 @@ export function Chat() {
           ))}
 
           {current.isGenerating && (
-            <div className="live-generation">
-              {current.outputs.length > 0 && (
-                <div className="live-outputs">
-                  {current.outputs.map((output, oIdx) => (
-                    <div key={oIdx} className="output-item">
-                      {output.type === 'text' && output.text && <div className="response-text">{output.text}</div>}
-                      {output.type === 'image' && output.imageData && (
-                        <figure className="output-image generating">
-                          <img src={output.imageData} alt={`Generated ${oIdx + 1}`} />
-                        </figure>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {current.outputs.length === 0 && (
-                <div className="generating-indicator">
-                  <div className="streaming-badge large">
-                    <span className="pulse"></span>
-                    GENERATING...
-                  </div>
-                </div>
-              )}
+            <div className="generating-indicator">
+              <div className="streaming-badge large">
+                <span className="pulse"></span>
+                GENERATING...
+              </div>
             </div>
           )}
 
