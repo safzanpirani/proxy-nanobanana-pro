@@ -1,73 +1,70 @@
-# React + TypeScript + Vite
+# Gemini 3 Pro Image Studio
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A sleek, neo-brutalist UI for Google's Gemini 3 Pro Image model. Generate and iteratively edit images through multi-turn conversations.
 
-Currently, two official plugins are available:
+![Gemini 3 Pro Image Studio](https://img.shields.io/badge/Gemini-3_Pro_Image-c8ff00?style=for-the-badge)
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+## Features
 
-## React Compiler
+- **Multi-turn Image Generation** - Have a conversation with the model to iteratively refine images
+- **Image Input Support** - Upload up to 14 reference images or paste from clipboard (Ctrl+V)
+- **Resolution Control** - Generate at 1K, 2K, or 4K resolution
+- **Aspect Ratios** - Choose from 1:1, 16:9, 9:16, 4:3, 3:4, 21:9
+- **Google Search Grounding** - Optional web grounding for more accurate generations
+- **Session History** - Auto-saves sessions with thumbnails to localStorage
+- **Image Lightbox** - Click any image to view full-size with prompt and generation stats
+- **Per-Image Regeneration** - Regenerate specific images without losing conversation context
+- **WebP Storage** - Efficient image storage with progressive quality fallback
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Requirements
 
-## Expanding the ESLint configuration
+This app connects to a local Gemini API proxy running at `localhost:8317`. You'll need:
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+1. A Gemini API proxy that forwards requests to `generativelanguage.googleapis.com`
+2. The proxy should expose the `/v1beta` endpoint
+3. Model: `gemini-3-pro-image-preview`
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+## Setup
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+```bash
+# Install dependencies
+npm install
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+# Start development server
+npm run dev
+
+# Build for production
+npm run build
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+## Usage
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+1. Start your Gemini API proxy on port 8317
+2. Run the app with `npm run dev`
+3. Open `http://localhost:5173`
+4. Enter a prompt and click GO to generate
+5. Continue the conversation to edit/refine the image
+6. Use the action buttons under each image:
+   - **↗ Open** - View full-size in new tab
+   - **↓ Download** - Save as WebP
+   - **↻ Regen** - Regenerate with same prompt
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+## Tech Stack
+
+- React 19 + TypeScript
+- Vite
+- Google GenAI SDK (`@google/genai`)
+- Neo-brutalist design with Instrument Serif, Space Mono, DM Sans fonts
+
+## API Configuration
+
+The app connects to:
 ```
+http://localhost:8317/v1beta/models/gemini-3-pro-image-preview
+```
+
+Modify `src/lib/ai.ts` to change the endpoint or model.
+
+## License
+
+MIT
