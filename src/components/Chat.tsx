@@ -96,9 +96,28 @@ function dataUrlToBlobUrl(dataUrl: string): string {
   }
 }
 
-function openImageInNewTab(dataUrl: string) {
-  const blobUrl = dataUrlToBlobUrl(dataUrl);
-  window.open(blobUrl, '_blank');
+function openImageInNewTab(imageUrl: string) {
+  if (imageUrl.startsWith('data:')) {
+    const blobUrl = dataUrlToBlobUrl(imageUrl);
+    window.open(blobUrl, '_blank');
+  } else {
+    window.open(imageUrl, '_blank');
+  }
+}
+
+async function downloadImage(imageUrl: string, filename: string) {
+  try {
+    const response = await fetch(imageUrl);
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    console.error('Download failed:', e);
+  }
 }
 
 async function storeImageToDB(imageData: string): Promise<string | null> {
@@ -111,8 +130,8 @@ async function storeImageToDB(imageData: string): Promise<string | null> {
   }
 }
 
-async function loadImageFromDB(id: string): Promise<string | null> {
-  return storage.getImage(id);
+function getImageUrl(id: string): string {
+  return `/api/images/${id}`;
 }
 
 async function loadSessionFromDB(id: string): Promise<ConversationTurn[] | null> {
@@ -120,31 +139,28 @@ async function loadSessionFromDB(id: string): Promise<ConversationTurn[] | null>
     const data = await storage.getSession(id) as ConversationTurn[] | null;
     if (!data) return null;
 
-    const turns = await Promise.all(data.map(async turn => ({
+    const turns = data.map(turn => ({
       ...turn,
       timestamp: new Date(turn.timestamp),
-      images: turn.images ? await Promise.all(turn.images.map(async img => {
+      images: turn.images?.map(img => {
         if (img.storageId) {
-          const restored = await loadImageFromDB(img.storageId);
-          return { ...img, dataUrl: restored || '' };
+          return { ...img, dataUrl: getImageUrl(img.storageId) };
         }
         return img;
-      })) : undefined,
-      outputs: await Promise.all(turn.outputs.map(async o => {
+      }),
+      outputs: turn.outputs.map(o => {
         if (o.type === 'image' && o.storageId) {
-          const restored = await loadImageFromDB(o.storageId);
-          return { ...o, imageData: restored || '' };
+          return { ...o, imageData: getImageUrl(o.storageId) };
         }
         return o;
-      })),
-      thoughts: await Promise.all(turn.thoughts.map(async t => {
+      }),
+      thoughts: turn.thoughts.map(t => {
         if (t.type === 'thought-image' && t.storageId) {
-          const restored = await loadImageFromDB(t.storageId);
-          return { ...t, imageData: restored || '' };
+          return { ...t, imageData: getImageUrl(t.storageId) };
         }
         return t;
-      })),
-    })));
+      }),
+    }));
 
     return turns;
   } catch {
@@ -804,14 +820,19 @@ export function Chat() {
                                 >
                                   ↗ Open
                                 </button>
-                                <a 
-                                  href={output.imageData} 
-                                  download={`gemini-${turn.resolution}-${turn.aspectRatio.replace(':', 'x')}-${Date.now()}.webp`}
-                                  onClick={(e) => e.stopPropagation()}
+                                <button
+                                  type="button"
                                   className="img-action-btn"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    downloadImage(
+                                      output.imageData!,
+                                      `gemini-${turn.resolution}-${turn.aspectRatio.replace(':', 'x')}-${Date.now()}.webp`
+                                    );
+                                  }}
                                 >
                                   ↓ Download
-                                </a>
+                                </button>
                                 <button
                                   type="button"
                                   className="img-action-btn regen"
@@ -965,13 +986,16 @@ export function Chat() {
                   <span className="stat-value">{lightbox.timestamp.toLocaleString()}</span>
                 </div>
               </div>
-              <a 
-                href={lightbox.imageData} 
-                download={`gemini-${lightbox.resolution}-${lightbox.aspectRatio.replace(':', 'x')}-${Date.now()}.webp`}
+              <button
+                type="button"
+                onClick={() => downloadImage(
+                  lightbox.imageData,
+                  `gemini-${lightbox.resolution}-${lightbox.aspectRatio.replace(':', 'x')}-${Date.now()}.webp`
+                )}
                 className="lightbox-download"
               >
                 ↓ Download Full Size
-              </a>
+              </button>
             </div>
           </div>
         </div>
