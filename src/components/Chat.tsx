@@ -483,6 +483,26 @@ export function Chat() {
         ? [...conversationHistory, { role: 'user', parts: userParts }]
         : [{ role: 'user', parts: userParts }];
 
+      // Debug: log what's being sent to API
+      console.log('[DEBUG] API Request - contents summary:', contents.map((c, i) => ({
+        index: i,
+        role: c.role,
+        partsCount: c.parts?.length || 0,
+        parts: (c.parts || []).map((p, pi) => {
+          const part = p as Record<string, unknown>;
+          const inlineData = part.inlineData as { data?: string; mimeType?: string } | undefined;
+          return {
+            partIndex: pi,
+            type: part.text ? 'text' : inlineData ? 'image' : 'unknown',
+            hasSignature: !!part.thoughtSignature,
+            textPreview: part.text ? String(part.text).slice(0, 50) : undefined,
+            imageDataLength: inlineData?.data ? String(inlineData.data).length : 0,
+            mimeType: inlineData?.mimeType,
+          };
+        }),
+      })));
+      console.log('[DEBUG] conversationHistory length:', conversationHistory.length);
+
       const response = await client.models.generateContent({
         model: MODEL_ID,
         contents,
