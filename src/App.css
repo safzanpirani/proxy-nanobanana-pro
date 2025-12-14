@@ -2022,3 +2022,250 @@ body {
 
 /* Remove duplicate workspace rule that was at line 302-308 */
 /* Remove duplicate workspace rule that was at line 861-865 */
+
+/* ===== BRANCHING / EDIT UI STYLES ===== */
+
+/* Version navigation */
+.version-nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+}
+
+.version-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: 16px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.version-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+}
+
+.version-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.version-indicator {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  padding: 0 4px;
+  min-width: 40px;
+  text-align: center;
+}
+
+/* Message action buttons (edit, delete) */
+.message-actions {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.user-message:hover .message-actions {
+  opacity: 1;
+}
+
+.msg-action-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.msg-action-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
+.msg-action-btn.edit:hover:not(:disabled) {
+  color: var(--accent-secondary);
+  border-color: var(--accent-secondary);
+}
+
+.msg-action-btn.delete:hover:not(:disabled) {
+  color: var(--accent-warm);
+  border-color: var(--accent-warm);
+}
+
+.msg-action-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+/* Edit mode UI */
+.edit-mode {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 16px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+}
+
+.edit-textarea {
+  width: 100%;
+  padding: 14px 16px;
+  font-family: var(--font-body);
+  font-size: 15px;
+  line-height: 1.6;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  resize: vertical;
+  min-height: 80px;
+  transition: border-color 0.2s ease;
+}
+
+.edit-textarea:focus {
+  outline: none;
+  border-color: var(--accent-secondary);
+}
+
+.edit-images {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.edit-image-thumb {
+  position: relative;
+  width: 60px;
+  height: 60px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+}
+
+.edit-image-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.remove-edit-img {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  background: rgba(0, 0, 0, 0.7);
+  border: none;
+  border-radius: 50%;
+  color: var(--text-primary);
+  font-size: 12px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s ease;
+}
+
+.remove-edit-img:hover {
+  background: var(--accent-warm);
+}
+
+.edit-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.edit-cancel-btn,
+.edit-save-btn {
+  padding: 10px 18px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.edit-cancel-btn {
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  color: var(--text-muted);
+}
+
+.edit-cancel-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+}
+
+.edit-save-btn {
+  background: var(--accent-secondary);
+  border: 1px solid var(--accent-secondary);
+  color: var(--bg-dark);
+}
+
+.edit-save-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 255, 200, 0.3);
+}
+
+.edit-save-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Mobile adjustments for branching UI */
+@media (max-width: 768px) {
+  .message-actions {
+    opacity: 1;
+  }
+  
+  .version-nav {
+    margin-left: 0;
+    margin-top: 8px;
+  }
+  
+  .message-meta {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  
+  .edit-mode {
+    padding: 12px;
+  }
+  
+  .edit-actions {
+    flex-direction: column;
+  }
+  
+  .edit-cancel-btn,
+  .edit-save-btn {
+    width: 100%;
+    justify-content: center;
+  }
+}

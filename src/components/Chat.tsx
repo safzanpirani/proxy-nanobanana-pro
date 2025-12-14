@@ -12,6 +12,19 @@ interface GenerationState {
   endTime?: number;
 }
 
+// A single version of a user+model turn pair
+interface TurnVersion {
+  id: string;
+  userPrompt?: string;
+  userImages?: UploadedImage[];
+  modelThoughts: ThoughtPart[];
+  modelOutputs: OutputPart[];
+  aspectRatio: AspectRatio;
+  resolution: Resolution;
+  timestamp: Date;
+  generationTime?: number;
+}
+
 interface ConversationTurn {
   role: 'user' | 'model';
   prompt?: string;
@@ -22,6 +35,11 @@ interface ConversationTurn {
   resolution: Resolution;
   timestamp: Date;
   generationTime?: number;
+  // Branching support: store alternate versions of this turn pair
+  versions?: TurnVersion[];
+  selectedVersion?: number;
+  // Unique ID for this turn (for branching reference)
+  turnId?: string;
 }
 
 interface SavedSessionMeta {
@@ -232,6 +250,11 @@ export function Chat() {
   const [lastPrompt, setLastPrompt] = useState<string>('');
   const [lastImages, setLastImages] = useState<UploadedImage[]>([]);
   const [lightbox, setLightbox] = useState<ImageLightbox | null>(null);
+  
+  // Edit mode state for branching
+  const [editingTurnIdx, setEditingTurnIdx] = useState<number | null>(null);
+  const [editInput, setEditInput] = useState('');
+  const [editImages, setEditImages] = useState<UploadedImage[]>([]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -702,6 +725,257 @@ export function Chat() {
     }
   }
 
+  // ===== BRANCHING HANDLERS =====
+  
+  // Start editing a user message (for branching)
+  function handleStartEdit(turnIdx: number) {
+    const turn = conversation[turnIdx];
+    if (turn?.role !== 'user') return;
+    
+    setEditingTurnIdx(turnIdx);
+    setEditInput(turn.prompt || '');
+    setEditImages(turn.images || []);
+  }
+  
+  // Cancel editing
+  function handleCancelEdit() {
+    setEditingTurnIdx(null);
+    setEditInput('');
+    setEditImages([]);
+  }
+  
+  // Save edit and regenerate (creates a new branch/version)
+  async function handleSaveEdit() {
+    if (editingTurnIdx === null || current.isGenerating) return;
+    
+    const userTurnIdx = editingTurnIdx;
+    const modelTurnIdx = userTurnIdx + 1;
+    const userTurn = conversation[userTurnIdx];
+    const modelTurn = conversation[modelTurnIdx];
+    
+    if (!userTurn || userTurn.role !== 'user') return;
+    
+    // Create a version of the current state before editing
+    const currentVersion: TurnVersion = {
+      id: `v-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      userPrompt: userTurn.prompt,
+      userImages: userTurn.images,
+      modelThoughts: modelTurn?.thoughts || [],
+      modelOutputs: modelTurn?.outputs || [],
+      aspectRatio: userTurn.aspectRatio,
+      resolution: userTurn.resolution,
+      timestamp: userTurn.timestamp,
+      generationTime: modelTurn?.generationTime,
+    };
+    
+    // Get existing versions or create new array
+    const existingVersions = userTurn.versions || [];
+    // Only add current state to versions if it's not already there (first edit)
+    const versions = existingVersions.length === 0 
+      ? [currentVersion] 
+      : existingVersions;
+    
+    const newPrompt = editInput.trim();
+    const newImages = [...editImages];
+    
+    // Update user turn with new prompt/images, keeping versions
+    const updatedUserTurn: ConversationTurn = {
+      ...userTurn,
+      prompt: newPrompt || undefined,
+      images: newImages.length > 0 ? newImages : undefined,
+      versions,
+      selectedVersion: versions.length, // Point to the new (upcoming) version
+      timestamp: new Date(),
+    };
+    
+    // Truncate conversation at this point (remove model response and everything after)
+    const newConversation = [
+      ...conversation.slice(0, userTurnIdx),
+      updatedUserTurn,
+    ];
+    
+    setConversation(newConversation);
+    
+    // Truncate history as well
+    const historyEntriesToKeep = userTurnIdx; // Each pair = 2 entries, but we want up to (not including) this user turn
+    setConversationHistory(prev => prev.slice(0, historyEntriesToKeep));
+    
+    // Clear edit state
+    setEditingTurnIdx(null);
+    setEditInput('');
+    setEditImages([]);
+    
+    // Regenerate with new prompt
+    await generateWithParams(newPrompt, newImages, true);
+  }
+  
+  // Delete a turn pair (user + model)
+  function handleDeleteTurn(turnIdx: number) {
+    if (current.isGenerating) return;
+    
+    const turn = conversation[turnIdx];
+    if (!turn) return;
+    
+    // Find the pair to delete
+    let startIdx: number, endIdx: number;
+    
+    if (turn.role === 'user') {
+      startIdx = turnIdx;
+      endIdx = turnIdx + 2; // Include the model response
+    } else {
+      // Model turn - delete it and the preceding user turn
+      startIdx = turnIdx - 1;
+      endIdx = turnIdx + 1;
+    }
+    
+    // Ensure valid range
+    startIdx = Math.max(0, startIdx);
+    endIdx = Math.min(conversation.length, endIdx);
+    
+    const newConversation = [
+      ...conversation.slice(0, startIdx),
+      ...conversation.slice(endIdx),
+    ];
+    
+    setConversation(newConversation);
+    
+    // Rebuild history from remaining turns
+    rebuildConversationHistory(newConversation);
+  }
+  
+  // Navigate between versions of a branched message
+  function handleVersionChange(turnIdx: number, direction: 'prev' | 'next') {
+    const userTurn = conversation[turnIdx];
+    if (!userTurn || userTurn.role !== 'user' || !userTurn.versions) return;
+    
+    const currentVersion = userTurn.selectedVersion ?? userTurn.versions.length;
+    const maxVersion = userTurn.versions.length;
+    
+    let newVersion: number;
+    if (direction === 'prev') {
+      newVersion = Math.max(0, currentVersion - 1);
+    } else {
+      newVersion = Math.min(maxVersion, currentVersion + 1);
+    }
+    
+    if (newVersion === currentVersion) return;
+    
+    // Get the version data
+    const versionData = userTurn.versions[newVersion];
+    if (!versionData && newVersion !== maxVersion) return;
+    
+    // Update the conversation with the selected version's data
+    const modelTurnIdx = turnIdx + 1;
+    
+    if (newVersion < maxVersion && versionData) {
+      // Switch to a previous version
+      const updatedUserTurn: ConversationTurn = {
+        ...userTurn,
+        prompt: versionData.userPrompt,
+        images: versionData.userImages,
+        selectedVersion: newVersion,
+      };
+      
+      const updatedModelTurn: ConversationTurn = {
+        role: 'model',
+        thoughts: versionData.modelThoughts,
+        outputs: versionData.modelOutputs,
+        aspectRatio: versionData.aspectRatio,
+        resolution: versionData.resolution,
+        timestamp: versionData.timestamp,
+        generationTime: versionData.generationTime,
+      };
+      
+      const newConversation = [
+        ...conversation.slice(0, turnIdx),
+        updatedUserTurn,
+        updatedModelTurn,
+        ...conversation.slice(modelTurnIdx + 1),
+      ];
+      
+      setConversation(newConversation);
+      rebuildConversationHistory(newConversation);
+    } else {
+      // Switch back to current (latest) version - restore from the last item or current state
+      const updatedUserTurn: ConversationTurn = {
+        ...userTurn,
+        selectedVersion: newVersion,
+      };
+      
+      setConversation(prev => {
+        const newConv = [...prev];
+        newConv[turnIdx] = updatedUserTurn;
+        return newConv;
+      });
+    }
+  }
+  
+  // Helper to rebuild conversation history from turns
+  async function rebuildConversationHistory(turns: ConversationTurn[]) {
+    const history: Content[] = [];
+    
+    for (const turn of turns) {
+      const parts: Part[] = [];
+      
+      if (turn.role === 'user') {
+        if (turn.prompt) {
+          parts.push({ text: turn.prompt });
+        }
+        if (turn.images) {
+          for (const img of turn.images) {
+            const base64 = img.dataUrl?.split(',')[1];
+            if (base64) {
+              parts.push({
+                inlineData: {
+                  mimeType: img.mimeType,
+                  data: base64,
+                }
+              });
+            }
+          }
+        }
+      } else if (turn.role === 'model') {
+        for (const output of turn.outputs) {
+          if (output.type === 'text' && output.text) {
+            parts.push({ text: output.text });
+          } else if (output.type === 'image' && output.imageData) {
+            let base64 = '';
+            if (output.imageData.startsWith('data:')) {
+              base64 = output.imageData.split(',')[1];
+            } else if (output.storageId) {
+              try {
+                const response = await fetch(output.imageData);
+                const blob = await response.blob();
+                const reader = new FileReader();
+                const dataUrl = await new Promise<string>((resolve) => {
+                  reader.onloadend = () => resolve(reader.result as string);
+                  reader.readAsDataURL(blob);
+                });
+                base64 = dataUrl.split(',')[1];
+              } catch (e) {
+                console.error('Failed to load image for history:', e);
+              }
+            }
+            if (base64) {
+              parts.push({
+                inlineData: {
+                  mimeType: output.mimeType || 'image/png',
+                  data: base64,
+                }
+              });
+            }
+          }
+        }
+      }
+      
+      if (parts.length > 0) {
+        history.push({ role: turn.role, parts });
+      }
+    }
+    
+    setConversationHistory(history);
+  }
+
   const duration = current.startTime && current.endTime
     ? ((current.endTime - current.startTime) / 1000).toFixed(1)
     : null;
@@ -908,16 +1182,116 @@ export function Chat() {
                   <div className="message-meta">
                     <span className="role-label">YOU</span>
                     <span className="turn-config">{turn.resolution} · {turn.aspectRatio}</span>
-                  </div>
-                  {turn.prompt && <div className="message-content">{turn.prompt}</div>}
-                  {turn.images && turn.images.length > 0 && (
-                    <div className="user-images">
-                      {turn.images.map((img, imgIdx) => (
-                        <div key={imgIdx} className="user-image-thumb">
-                          {img.dataUrl && <img src={img.dataUrl} alt={img.name} />}
-                        </div>
-                      ))}
+                    
+                    {/* Version navigation for branched messages */}
+                    {turn.versions && turn.versions.length > 0 && (
+                      <div className="version-nav">
+                        <button
+                          type="button"
+                          className="version-btn"
+                          onClick={() => handleVersionChange(idx, 'prev')}
+                          disabled={(turn.selectedVersion ?? turn.versions.length) === 0 || current.isGenerating}
+                        >
+                          ‹
+                        </button>
+                        <span className="version-indicator">
+                          {(turn.selectedVersion ?? turn.versions.length) + 1} / {turn.versions.length + 1}
+                        </span>
+                        <button
+                          type="button"
+                          className="version-btn"
+                          onClick={() => handleVersionChange(idx, 'next')}
+                          disabled={(turn.selectedVersion ?? turn.versions.length) === turn.versions.length || current.isGenerating}
+                        >
+                          ›
+                        </button>
+                      </div>
+                    )}
+                    
+                    {/* Edit and Delete buttons */}
+                    <div className="message-actions">
+                      {editingTurnIdx !== idx && (
+                        <>
+                          <button
+                            type="button"
+                            className="msg-action-btn edit"
+                            onClick={() => handleStartEdit(idx)}
+                            disabled={current.isGenerating}
+                            title="Edit this message"
+                          >
+                            ✎
+                          </button>
+                          <button
+                            type="button"
+                            className="msg-action-btn delete"
+                            onClick={() => handleDeleteTurn(idx)}
+                            disabled={current.isGenerating}
+                            title="Delete this turn"
+                          >
+                            ✕
+                          </button>
+                        </>
+                      )}
                     </div>
+                  </div>
+                  
+                  {/* Edit mode UI */}
+                  {editingTurnIdx === idx ? (
+                    <div className="edit-mode">
+                      <textarea
+                        className="edit-textarea"
+                        value={editInput}
+                        onChange={(e) => setEditInput(e.target.value)}
+                        placeholder="Edit your message..."
+                        rows={3}
+                      />
+                      {editImages.length > 0 && (
+                        <div className="edit-images">
+                          {editImages.map((img, imgIdx) => (
+                            <div key={imgIdx} className="edit-image-thumb">
+                              {img.dataUrl && <img src={img.dataUrl} alt={img.name} />}
+                              <button
+                                type="button"
+                                className="remove-edit-img"
+                                onClick={() => setEditImages(prev => prev.filter((_, i) => i !== imgIdx))}
+                              >
+                                ×
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      <div className="edit-actions">
+                        <button
+                          type="button"
+                          className="edit-cancel-btn"
+                          onClick={handleCancelEdit}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          className="edit-save-btn"
+                          onClick={handleSaveEdit}
+                          disabled={!editInput.trim() && editImages.length === 0}
+                        >
+                          Save & Regenerate
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      {turn.prompt && <div className="message-content">{turn.prompt}</div>}
+                      {turn.images && turn.images.length > 0 && (
+                        <div className="user-images">
+                          {turn.images.map((img, imgIdx) => (
+                            <div key={imgIdx} className="user-image-thumb">
+                              {img.dataUrl && <img src={img.dataUrl} alt={img.name} />}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
               )}
