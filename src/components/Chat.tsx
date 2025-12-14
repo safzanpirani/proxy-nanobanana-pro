@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, type FormEvent, type ChangeEvent, type ClipboardEvent } from 'react';
 import { client, MODEL_ID, ASPECT_RATIOS, RESOLUTIONS, createImagePart, Modality, type AspectRatio, type Resolution, type ThoughtPart, type OutputPart, type Content, type UploadedImage, type Part } from '../lib/ai';
+import * as storage from '../lib/storage';
 
 interface GenerationState {
   thoughts: ThoughtPart[];
@@ -41,11 +42,7 @@ interface ImageLightbox {
   timestamp: Date;
 }
 
-const STORAGE_KEY = 'gemini-sessions-meta';
-const SESSION_PREFIX = 'gemini-session-';
-const IMAGE_PREFIX = 'gemini-img-';
 const THUMBNAIL_SIZE = 80;
-const MAX_STORED_IMAGES = 50;
 
 async function resizeImageToThumbnail(dataUrl: string): Promise<string> {
   return new Promise((resolve) => {
@@ -66,8 +63,7 @@ async function resizeImageToThumbnail(dataUrl: string): Promise<string> {
   });
 }
 
-// Convert any image to WebP format
-async function convertToWebP(dataUrl: string, quality = 0.92): Promise<string> {
+async function convertToWebP(dataUrl: string, quality = 0.6): Promise<string> {
   return new Promise((resolve) => {
     const img = new Image();
     img.onload = () => {
@@ -78,12 +74,11 @@ async function convertToWebP(dataUrl: string, quality = 0.92): Promise<string> {
       ctx.drawImage(img, 0, 0);
       resolve(canvas.toDataURL('image/webp', quality));
     };
-    img.onerror = () => resolve(dataUrl); // fallback to original
+    img.onerror = () => resolve(dataUrl);
     img.src = dataUrl;
   });
 }
 
-// Convert data URL to blob URL for opening in new tab
 function dataUrlToBlobUrl(dataUrl: string): string {
   try {
     const [header, base64] = dataUrl.split(',');
@@ -106,151 +101,84 @@ function openImageInNewTab(dataUrl: string) {
   window.open(blobUrl, '_blank');
 }
 
-function generateImageId(): string {
-  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
-async function storeImage(imageData: string): Promise<string | null> {
-  const id = generateImageId();
-  
-  // Try progressively lower quality if storage fails (start at 60%)
-  const qualities = [0.6, 0.45, 0.3];
-  
-  for (const quality of qualities) {
-    try {
-      const webpData = await convertToWebP(imageData, quality);
-      localStorage.setItem(IMAGE_PREFIX + id, webpData);
-      pruneOldImages();
-      return id;
-    } catch (e) {
-      // Quota exceeded, try lower quality
-      console.warn(`Storage failed at quality ${quality}, trying lower...`);
-      continue;
-    }
-  }
-  
-  // All attempts failed, try pruning more aggressively and retry
+async function storeImageToDB(imageData: string): Promise<string | null> {
   try {
-    pruneOldImages(10); // Keep only 10 images
-    const webpData = await convertToWebP(imageData, 0.2);
-    localStorage.setItem(IMAGE_PREFIX + id, webpData);
-    return id;
+    const webpData = await convertToWebP(imageData, 0.6);
+    return await storage.saveImage(webpData);
   } catch (e) {
-    console.error('Failed to store image after all retries:', e);
+    console.error('Failed to store image:', e);
     return null;
   }
 }
 
-function loadImage(id: string): string | null {
-  try {
-    return localStorage.getItem(IMAGE_PREFIX + id);
-  } catch {
-    return null;
-  }
+async function loadImageFromDB(id: string): Promise<string | null> {
+  return storage.getImage(id);
 }
 
-function pruneOldImages(count = MAX_STORED_IMAGES) {
+async function loadSessionFromDB(id: string): Promise<ConversationTurn[] | null> {
   try {
-    const imageKeys: string[] = [];
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (key?.startsWith(IMAGE_PREFIX)) {
-        imageKeys.push(key);
-      }
-    }
-    
-    if (imageKeys.length > count) {
-      imageKeys.sort();
-      const toRemove = imageKeys.slice(0, imageKeys.length - count);
-      toRemove.forEach(key => localStorage.removeItem(key));
-    }
-  } catch {}
-}
-
-function loadSessionsMeta(): SavedSessionMeta[] {
-  try {
-    const data = localStorage.getItem(STORAGE_KEY);
-    return data ? JSON.parse(data) : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveSessionsMeta(sessions: SavedSessionMeta[]) {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions));
-  } catch (e) {
-    console.warn('Failed to save sessions meta:', e);
-  }
-}
-
-function loadSession(id: string): ConversationTurn[] | null {
-  try {
-    const data = localStorage.getItem(SESSION_PREFIX + id);
+    const data = await storage.getSession(id) as ConversationTurn[] | null;
     if (!data) return null;
-    const turns: ConversationTurn[] = JSON.parse(data);
-    
-    // Restore images from separate storage
-    return turns.map(turn => ({
+
+    const turns = await Promise.all(data.map(async turn => ({
       ...turn,
-      images: turn.images?.map(img => {
+      timestamp: new Date(turn.timestamp),
+      images: turn.images ? await Promise.all(turn.images.map(async img => {
         if (img.storageId) {
-          const restored = loadImage(img.storageId);
+          const restored = await loadImageFromDB(img.storageId);
           return { ...img, dataUrl: restored || '' };
         }
         return img;
-      }),
-      outputs: turn.outputs.map(o => {
+      })) : undefined,
+      outputs: await Promise.all(turn.outputs.map(async o => {
         if (o.type === 'image' && o.storageId) {
-          const restored = loadImage(o.storageId);
+          const restored = await loadImageFromDB(o.storageId);
           return { ...o, imageData: restored || '' };
         }
         return o;
-      }),
-      thoughts: turn.thoughts.map(t => {
+      })),
+      thoughts: await Promise.all(turn.thoughts.map(async t => {
         if (t.type === 'thought-image' && t.storageId) {
-          const restored = loadImage(t.storageId);
+          const restored = await loadImageFromDB(t.storageId);
           return { ...t, imageData: restored || '' };
         }
         return t;
-      }),
-    }));
+      })),
+    })));
+
+    return turns;
   } catch {
     return null;
   }
 }
 
-async function saveSession(id: string, conversation: ConversationTurn[]): Promise<ConversationTurn[]> {
+async function saveSessionToDB(id: string, conversation: ConversationTurn[]): Promise<ConversationTurn[]> {
   try {
     const forStorage = await Promise.all(conversation.map(async turn => ({
       ...turn,
-      // Store user-uploaded images and save IDs
       images: turn.images ? await Promise.all(turn.images.map(async img => {
         if (img.dataUrl && !img.storageId) {
-          const storageId = await storeImage(img.dataUrl);
+          const storageId = await storeImageToDB(img.dataUrl);
           return { ...img, storageId: storageId || img.storageId };
         }
         return img;
       })) : undefined,
-      // Store generated images and save IDs
       outputs: await Promise.all(turn.outputs.map(async o => {
         if (o.type === 'image' && o.imageData && !o.storageId) {
-          const storageId = await storeImage(o.imageData);
+          const storageId = await storeImageToDB(o.imageData);
           return { ...o, storageId: storageId || o.storageId };
         }
         return o;
       })),
-      // Store thought images and save IDs
       thoughts: await Promise.all(turn.thoughts.map(async t => {
         if (t.type === 'thought-image' && t.imageData && !t.storageId) {
-          const storageId = await storeImage(t.imageData);
+          const storageId = await storeImageToDB(t.imageData);
           return { ...t, storageId: storageId || t.storageId };
         }
         return t;
       })),
     })));
 
-    // Save with empty image data but keep storageIds
     const toSave = forStorage.map(turn => ({
       ...turn,
       images: turn.images?.map(img => ({ ...img, dataUrl: '' })),
@@ -258,20 +186,12 @@ async function saveSession(id: string, conversation: ConversationTurn[]): Promis
       thoughts: turn.thoughts.map(t => t.type === 'thought-image' ? { ...t, imageData: '' } : t),
     }));
 
-    localStorage.setItem(SESSION_PREFIX + id, JSON.stringify(toSave));
-    
-    // Return updated conversation with storageIds (keeping image data)
+    await storage.saveSession(id, toSave);
     return forStorage;
   } catch (e) {
     console.warn('Failed to save session:', e);
     return conversation;
   }
-}
-
-function deleteSessionData(id: string) {
-  try {
-    localStorage.removeItem(SESSION_PREFIX + id);
-  } catch {}
 }
 
 export function Chat() {
@@ -301,7 +221,7 @@ export function Chat() {
   const outputRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    setSessions(loadSessionsMeta());
+    storage.getAllSessionsMeta().then(setSessions);
   }, []);
 
   useEffect(() => {
@@ -321,29 +241,25 @@ export function Chat() {
         const thumbnail = firstImage ? await resizeImageToThumbnail(firstImage) : undefined;
         const firstPrompt = conversation.find(t => t.role === 'user')?.prompt || 'Untitled';
         
-        setSessions(prev => {
-          const existing = prev.find(s => s.id === currentSessionId);
-          const updated: SavedSessionMeta = {
-            id: currentSessionId,
-            name: firstPrompt.slice(0, 50),
-            createdAt: existing?.createdAt || new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-            thumbnail,
-            turnCount: Math.ceil(conversation.length / 2),
-          };
-          
-          const newSessions = existing 
-            ? prev.map(s => s.id === currentSessionId ? updated : s)
-            : [updated, ...prev];
-          
-          saveSessionsMeta(newSessions);
-          return newSessions;
-        });
-
-        // Save and get updated conversation with storageIds
-        const updatedConversation = await saveSession(currentSessionId, conversation);
+        const existing = sessions.find(s => s.id === currentSessionId);
+        const updated: SavedSessionMeta = {
+          id: currentSessionId,
+          name: firstPrompt.slice(0, 50),
+          createdAt: existing?.createdAt || new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          thumbnail,
+          turnCount: Math.ceil(conversation.length / 2),
+        };
         
-        // Update conversation state with storageIds if any were added
+        await storage.saveSessionMeta(updated);
+        
+        const newSessions = existing 
+          ? sessions.map(s => s.id === currentSessionId ? updated : s)
+          : [updated, ...sessions];
+        setSessions(newSessions);
+
+        const updatedConversation = await saveSessionToDB(currentSessionId, conversation);
+        
         const hasNewStorageIds = updatedConversation.some((turn, idx) => {
           const original = conversation[idx];
           if (!original) return false;
@@ -624,10 +540,10 @@ export function Chat() {
     });
   }
 
-  function handleLoadSession(session: SavedSessionMeta) {
-    const data = loadSession(session.id);
+  async function handleLoadSession(session: SavedSessionMeta) {
+    const data = await loadSessionFromDB(session.id);
     if (data) {
-      setConversation(data.map(t => ({ ...t, timestamp: new Date(t.timestamp) })));
+      setConversation(data);
       setCurrentSessionId(session.id);
       setConversationHistory([]);
       setCurrent({ thoughts: [], outputs: [], isGenerating: false, phase: 'idle' });
@@ -635,13 +551,10 @@ export function Chat() {
     }
   }
 
-  function handleDeleteSession(id: string) {
-    deleteSessionData(id);
-    setSessions(prev => {
-      const newSessions = prev.filter(s => s.id !== id);
-      saveSessionsMeta(newSessions);
-      return newSessions;
-    });
+  async function handleDeleteSession(id: string) {
+    await storage.deleteSession(id);
+    await storage.deleteSessionMeta(id);
+    setSessions(prev => prev.filter(s => s.id !== id));
     if (currentSessionId === id) {
       handleNewSession();
     }
