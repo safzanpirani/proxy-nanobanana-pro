@@ -1011,6 +1011,31 @@ export function Chat() {
     }
   }
 
+  async function handleRegenerateFromUserTurn(userTurnIdx: number) {
+    if (current.isGenerating) return;
+    
+    const userTurn = conversation[userTurnIdx];
+    if (!userTurn || userTurn.role !== 'user') return;
+    
+    const prompt = userTurn.prompt || '';
+    const images = userTurn.images || [];
+    
+    // Remove this turn and all turns after it
+    setConversation(prev => prev.slice(0, userTurnIdx));
+    setConversationHistory(prev => {
+      const turnsToKeep = userTurnIdx;
+      const historyEntriesToKeep = Math.floor(turnsToKeep / 2) * 2;
+      return prev.slice(0, historyEntriesToKeep);
+    });
+    
+    // Generate with current settings
+    if (bulkCount > 1) {
+      await generateBulk(prompt, images);
+    } else {
+      await generateWithParams(prompt, images, true);
+    }
+  }
+
   function handleNewSession() {
     setConversation([]);
     setConversationHistory([]);
@@ -1814,6 +1839,15 @@ export function Chat() {
                     <div className="message-actions">
                       {editingTurnIdx !== idx && (
                         <>
+                          <button
+                            type="button"
+                            className="msg-action-btn regen"
+                            onClick={() => handleRegenerateFromUserTurn(idx)}
+                            disabled={current.isGenerating}
+                            title="Regenerate with current settings"
+                          >
+                            ↻
+                          </button>
                           <button
                             type="button"
                             className="msg-action-btn copy"

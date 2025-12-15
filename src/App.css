@@ -2145,6 +2145,11 @@ body {
   border-color: var(--accent-primary);
 }
 
+.msg-action-btn.regen:hover:not(:disabled) {
+  color: var(--accent-tertiary);
+  border-color: var(--accent-tertiary);
+}
+
 .msg-action-btn.delete:hover:not(:disabled) {
   color: var(--accent-warm);
   border-color: var(--accent-warm);
