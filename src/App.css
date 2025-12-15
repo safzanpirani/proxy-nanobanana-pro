@@ -2519,6 +2519,28 @@ body {
 }
 
 /* Prompt presets */
+.preset-search {
+  width: 100%;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  transition: all 0.15s ease;
+}
+
+.preset-search:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+}
+
+.preset-search::placeholder {
+  color: var(--text-muted);
+}
+
 .presets-list {
   display: flex;
   flex-direction: column;

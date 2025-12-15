@@ -319,6 +319,7 @@ export function Chat() {
   const [showPresetInput, setShowPresetInput] = useState(false);
   const [newPresetName, setNewPresetName] = useState('');
   const [newPresetText, setNewPresetText] = useState('');
+  const [presetSearch, setPresetSearch] = useState('');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -1477,6 +1478,13 @@ export function Chat() {
   const lastModelTurn = [...conversation].reverse().find(t => t.role === 'model');
   const canSubmit = (input.trim() || uploadedImages.length > 0) && !current.isGenerating;
 
+  const filteredPresets = presetSearch.trim()
+    ? promptPresets.filter(p => 
+        p.name.toLowerCase().includes(presetSearch.toLowerCase()) ||
+        p.prompt.toLowerCase().includes(presetSearch.toLowerCase())
+      )
+    : promptPresets;
+
   return (
     <div className="studio">
       {/* Mobile menu toggle */}
@@ -1590,21 +1598,28 @@ export function Chat() {
 
             <div className="config-section">
               <label className="config-label">PROMPT PRESETS</label>
+              <input
+                type="text"
+                className="preset-search"
+                placeholder="Search presets..."
+                value={presetSearch}
+                onChange={(e) => setPresetSearch(e.target.value)}
+              />
               <div className="presets-list">
-                {promptPresets.map((preset, idx) => (
+                {filteredPresets.map((preset, idx) => (
                   <div key={idx} className="preset-item">
                     <button
                       type="button"
                       className="preset-btn"
                       onClick={() => usePreset(preset.prompt)}
-                      title={preset.name}
+                      title={preset.prompt}
                     >
                       {preset.name.length > 30 ? preset.name.slice(0, 30) + '...' : preset.name}
                     </button>
                     <button
                       type="button"
                       className="preset-delete"
-                      onClick={() => removePreset(idx)}
+                      onClick={() => removePreset(promptPresets.indexOf(preset))}
                     >
                       ×
                     </button>
@@ -1879,6 +1894,17 @@ export function Chat() {
                         className="edit-textarea"
                         value={editInput}
                         onChange={(e) => setEditInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                            e.preventDefault();
+                            if (editInput.trim() || editImages.length > 0) {
+                              handleSaveEdit();
+                            }
+                          }
+                          if (e.key === 'Escape') {
+                            handleCancelEdit();
+                          }
+                        }}
                         placeholder="Edit your message..."
                         rows={3}
                       />
