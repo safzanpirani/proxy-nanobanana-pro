@@ -1212,7 +1212,7 @@ export function Chat() {
     
     if (!userTurn || userTurn.role !== 'user') return;
     
-    // Preserve the original turn's parameters
+    // Preserve original parameters for version history
     const originalAspectRatio = userTurn.aspectRatio;
     const originalResolution = userTurn.resolution;
     
@@ -1231,7 +1231,6 @@ export function Chat() {
     
     // Get existing versions or create new array
     const existingVersions = userTurn.versions || [];
-    // Only add current state to versions if it's not already there (first edit)
     const versions = existingVersions.length === 0 
       ? [currentVersion] 
       : existingVersions;
@@ -1239,31 +1238,25 @@ export function Chat() {
     const newPrompt = editInput.trim();
     const newImages = [...editImages];
     
-    // Truncate conversation BEFORE the edited turn (we'll add it fresh via generateWithParams)
+    // Truncate conversation BEFORE the edited turn
     const truncatedConversation = conversation.slice(0, userTurnIdx);
     
-    // Store versions info to be added after generation
-    // We need to pass this through the generation cycle
     const versionsToPreserve = versions;
     
     setConversation(truncatedConversation);
     
-    // Rebuild history from the truncated conversation (turns before the edited one)
     await rebuildConversationHistory(truncatedConversation);
     
-    // Clear edit state
     setEditingTurnIdx(null);
     setEditInput('');
     setEditImages([]);
     
-    // Regenerate with new prompt but using ORIGINAL parameters
-    await generateWithParams(
-      newPrompt, 
-      newImages, 
-      true,
-      originalAspectRatio,
-      originalResolution
-    );
+    // Generate with current settings (not original)
+    if (bulkCount > 1) {
+      await generateBulk(newPrompt, newImages);
+    } else {
+      await generateWithParams(newPrompt, newImages, true);
+    }
     
     // After generation completes, update the user turn to include versions
     setConversation(prev => {
