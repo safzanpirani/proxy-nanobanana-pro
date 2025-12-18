@@ -1331,10 +1331,11 @@ body {
   font-family: var(--font-mono);
   font-size: 10px;
   font-weight: 700;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.05em;
   color: var(--text-muted);
   cursor: pointer;
   transition: all 0.15s ease;
+  flex-shrink: 0;
 }
 
 .tab-btn:hover {
@@ -2052,9 +2053,6 @@ body {
   }
 }
 
-/* Remove duplicate workspace rule that was at line 302-308 */
-/* Remove duplicate workspace rule that was at line 861-865 */
-
 /* ===== BRANCHING / EDIT UI STYLES ===== */
 
 /* Version navigation */
@@ -2143,6 +2141,12 @@ body {
 .msg-action-btn.copy:hover:not(:disabled) {
   color: var(--accent-primary);
   border-color: var(--accent-primary);
+}
+
+.msg-action-btn.copy.copied {
+  color: var(--accent-secondary);
+  border-color: var(--accent-secondary);
+  background: rgba(0, 255, 200, 0.1);
 }
 
 .msg-action-btn.regen:hover:not(:disabled) {
@@ -3045,7 +3049,7 @@ body {
   overflow-wrap: anywhere;
 }
 
-.error-banner.error-content_policy {
+.error-banner.error-content-policy {
   background: rgba(255, 50, 50, 0.1);
   border-color: #ff5050;
   color: #ff5050;
@@ -3082,7 +3086,7 @@ body {
   box-shadow: 0 4px 12px rgba(255, 107, 53, 0.3);
 }
 
-.error-banner.error-content_policy .error-retry-btn {
+.error-banner.error-content-policy .error-retry-btn {
   background: #ff5050;
 }
 
@@ -3101,10 +3105,10 @@ body {
   letter-spacing: 0.05em;
 }
 
-.bulk-slot.error-content_policy {
+.bulk-slot.error-content-policy {
   border-color: #ff5050;
 }
 
-.bulk-slot.error-content_policy .slot-error-type {
+.bulk-slot.error-content-policy .slot-error-type {
   color: #ff5050;
 }

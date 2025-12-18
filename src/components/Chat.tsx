@@ -328,6 +328,8 @@ export function Chat() {
   
   const [localReplyContext, setLocalReplyContext] = useState<LocalReplyContext | null>(null);
   
+  const [copiedPromptIdx, setCopiedPromptIdx] = useState<number | null>(null);
+  
   // Default prompt presets
   const DEFAULT_PRESETS: Array<{ name: string; prompt: string }> = [
     // Master Template
@@ -456,6 +458,66 @@ export function Chat() {
   useEffect(() => {
     saveFlowithConfig(flowithConfig);
   }, [flowithConfig]);
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      // Ctrl+Enter - Generate
+      if (e.ctrlKey && e.key === 'Enter' && !current.isGenerating) {
+        e.preventDefault();
+        const form = document.querySelector('.prompt-form') as HTMLFormElement;
+        if (form) {
+          form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+        }
+      }
+      
+      // Escape - Close lightbox or clear reply context
+      if (e.key === 'Escape') {
+        if (lightbox) {
+          setLightbox(null);
+        } else if (flowithReplyContext) {
+          setFlowithReplyContext(null);
+        } else if (localReplyContext) {
+          setLocalReplyContext(null);
+        }
+      }
+      
+      // Ctrl+N - New session
+      if (e.ctrlKey && e.key === 'n' && !current.isGenerating) {
+        e.preventDefault();
+        handleNewSession();
+      }
+      
+      // Alt+1/2/3/4 - Quick bulk count selection
+      if (e.altKey && !current.isGenerating) {
+        if (e.key === '1') { e.preventDefault(); setBulkCount(1); }
+        if (e.key === '2') { e.preventDefault(); setBulkCount(2); }
+        if (e.key === '4') { e.preventDefault(); setBulkCount(4); }
+        if (e.key === '8') { e.preventDefault(); setBulkCount(8); }
+      }
+      
+      // Arrow keys for lightbox navigation
+      if (lightbox && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+        const allImages = conversation
+          .filter(t => t.role === 'model')
+          .flatMap(t => t.outputs.filter(o => o.type === 'image' && o.imageData));
+        
+        const currentIdx = allImages.findIndex(img => img.imageData === lightbox.imageData);
+        if (currentIdx !== -1) {
+          const newIdx = e.key === 'ArrowLeft' 
+            ? (currentIdx - 1 + allImages.length) % allImages.length
+            : (currentIdx + 1) % allImages.length;
+          const newImg = allImages[newIdx];
+          if (newImg?.imageData) {
+            setLightbox(prev => prev ? { ...prev, imageData: newImg.imageData! } : null);
+          }
+        }
+      }
+    }
+    
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [current.isGenerating, lightbox, flowithReplyContext, localReplyContext, conversation]);
 
   async function addImageFromFile(file: File): Promise<UploadedImage | null> {
     if (!file.type.startsWith('image/')) return null;
@@ -1724,8 +1786,10 @@ export function Chat() {
     setEditImages([]);
   }
   
-  function handleCopyPrompt(prompt: string) {
+  function handleCopyPrompt(prompt: string, turnIdx: number) {
     navigator.clipboard.writeText(prompt);
+    setCopiedPromptIdx(turnIdx);
+    setTimeout(() => setCopiedPromptIdx(null), 1500);
   }
   
   // Save edit and regenerate (creates a new branch/version)
@@ -2409,11 +2473,11 @@ export function Chat() {
                           </button>
                           <button
                             type="button"
-                            className="msg-action-btn copy"
-                            onClick={() => handleCopyPrompt(turn.prompt || '')}
-                            title="Copy prompt"
+                            className={`msg-action-btn copy ${copiedPromptIdx === idx ? 'copied' : ''}`}
+                            onClick={() => handleCopyPrompt(turn.prompt || '', idx)}
+                            title={copiedPromptIdx === idx ? "Copied!" : "Copy prompt"}
                           >
-                            ⧉
+                            {copiedPromptIdx === idx ? '✓' : '⧉'}
                           </button>
                           <button
                             type="button"
