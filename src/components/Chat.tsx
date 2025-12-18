@@ -1,6 +1,33 @@
 import { useState, useRef, useEffect, type FormEvent, type ChangeEvent, type ClipboardEvent } from 'react';
 import { client, MODEL_ID, ASPECT_RATIOS, RESOLUTIONS, createImagePart, Modality, type AspectRatio, type Resolution, type ThoughtPart, type OutputPart, type Content, type UploadedImage, type Part } from '../lib/ai';
 import * as storage from '../lib/storage';
+import { FlowithConfig, loadFlowithConfig, saveFlowithConfig } from './FlowithConfig';
+import {
+  type FlowithConfig as FlowithConfigType,
+  type FlowithAspectRatio,
+  type FlowithImageSize,
+  type FlowithMessage,
+  type FlowithErrorType,
+  uploadImageFromDataUrl,
+  generateImage as flowithGenerateImage,
+  generateBatch as flowithGenerateBatch,
+  validateConfig as validateFlowithConfig,
+  getFlowithErrorMessage,
+} from '../lib/flowith';
+
+type GenerationMode = 'local' | 'flowith';
+
+interface FlowithReplyContext {
+  imageUrl: string;
+  imageDataUrl: string;
+  history: FlowithMessage[];
+}
+
+interface LocalReplyContext {
+  imageDataUrl: string;
+  turnIdx: number;
+  history: Content[];
+}
 
 interface GenerationState {
   thoughts: ThoughtPart[];
@@ -8,6 +35,7 @@ interface GenerationState {
   isGenerating: boolean;
   phase: 'idle' | 'thinking' | 'generating' | 'done';
   error?: string;
+  errorType?: FlowithErrorType;
   startTime?: number;
   endTime?: number;
 }
@@ -138,6 +166,17 @@ async function downloadImage(imageUrl: string, filename: string) {
   }
 }
 
+async function fetchImageAsDataUrl(imageUrl: string): Promise<string> {
+  const response = await fetch(imageUrl);
+  const blob = await response.blob();
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
 async function storeImageToDB(imageData: string): Promise<string | null> {
   try {
     const webpData = await convertToWebP(imageData, 0.6);
@@ -251,6 +290,7 @@ export function Chat() {
     outputs: OutputPart[];
     thoughts: ThoughtPart[];
     error?: string;
+    errorType?: FlowithErrorType;
     generationTime?: number;
   }>>([]);
   
@@ -272,6 +312,21 @@ export function Chat() {
   
   // Live generation timer
   const [elapsedTime, setElapsedTime] = useState(0);
+  
+  const [generationMode, setGenerationMode] = useState<GenerationMode>(() => {
+    const saved = localStorage.getItem('generationMode');
+    return (saved === 'flowith' ? 'flowith' : 'local') as GenerationMode;
+  });
+  
+  const [flowithConfig, setFlowithConfig] = useState<FlowithConfigType>(() => loadFlowithConfig());
+  
+  const [flowithProgress, setFlowithProgress] = useState<'idle' | 'uploading' | 'connected' | 'processing'>('idle');
+  
+  const [flowithReplyContext, setFlowithReplyContext] = useState<FlowithReplyContext | null>(null);
+  
+  const [flowithConversationHistory, setFlowithConversationHistory] = useState<FlowithMessage[]>([]);
+  
+  const [localReplyContext, setLocalReplyContext] = useState<LocalReplyContext | null>(null);
   
   // Default prompt presets
   const DEFAULT_PRESETS: Array<{ name: string; prompt: string }> = [
@@ -393,6 +448,14 @@ export function Chat() {
       })();
     }
   }, [conversation, currentSessionId]);
+
+  useEffect(() => {
+    localStorage.setItem('generationMode', generationMode);
+  }, [generationMode]);
+
+  useEffect(() => {
+    saveFlowithConfig(flowithConfig);
+  }, [flowithConfig]);
 
   async function addImageFromFile(file: File): Promise<UploadedImage | null> {
     if (!file.type.startsWith('image/')) return null;
@@ -554,29 +617,11 @@ export function Chat() {
         userParts.push(createImagePart(base64, img.mimeType));
       }
 
+      // Use localReplyContext history if set, otherwise use regular conversationHistory
+      const historyToUse = localReplyContext ? localReplyContext.history : conversationHistory;
       const contents: Content[] = useCurrentHistory 
-        ? [...conversationHistory, { role: 'user', parts: userParts }]
+        ? [...historyToUse, { role: 'user', parts: userParts }]
         : [{ role: 'user', parts: userParts }];
-
-      // Debug: log what's being sent to API
-      console.log('[DEBUG] API Request - contents summary:', contents.map((c, i) => ({
-        index: i,
-        role: c.role,
-        partsCount: c.parts?.length || 0,
-        parts: (c.parts || []).map((p, pi) => {
-          const part = p as Record<string, unknown>;
-          const inlineData = part.inlineData as { data?: string; mimeType?: string } | undefined;
-          return {
-            partIndex: pi,
-            type: part.text ? 'text' : inlineData ? 'image' : 'unknown',
-            hasSignature: !!part.thoughtSignature,
-            textPreview: part.text ? String(part.text).slice(0, 50) : undefined,
-            imageDataLength: inlineData?.data ? String(inlineData.data).length : 0,
-            mimeType: inlineData?.mimeType,
-          };
-        }),
-      })));
-      console.log('[DEBUG] conversationHistory length:', conversationHistory.length);
 
       const response = await client.models.generateContent({
         model: MODEL_ID,
@@ -681,28 +726,16 @@ export function Chat() {
         }
       }
 
-      // Debug: log the history being sent
-      console.log('[DEBUG] Conversation history being sent:', JSON.stringify(
-        [...conversationHistory, { role: 'user', parts: userParts }, { role: 'model', parts: modelParts }]
-          .map(c => ({
-            role: c.role,
-            parts: (c.parts || []).map((p) => {
-              const part = p as Record<string, unknown>;
-              return {
-                hasText: !!part.text,
-                hasImage: !!part.inlineData,
-                hasSignature: !!part.thoughtSignature,
-              };
-            })
-          })),
-        null, 2
-      ));
-
-      setConversationHistory(prev => [
-        ...prev, 
+      setConversationHistory([
+        ...historyToUse, 
         { role: 'user', parts: userParts }, 
         { role: 'model', parts: modelParts }
       ]);
+
+      // Clear local reply context after successful generation
+      if (localReplyContext) {
+        setLocalReplyContext(null);
+      }
 
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -949,6 +982,329 @@ export function Chat() {
     setTimeout(() => setBulkResults([]), 500);
   }
 
+  function mapResolutionToFlowith(res: Resolution): FlowithImageSize {
+    return res.toLowerCase() as FlowithImageSize;
+  }
+
+  function mapAspectRatioToFlowith(ratio: AspectRatio): FlowithAspectRatio {
+    return ratio as FlowithAspectRatio;
+  }
+
+  async function generateWithFlowith(
+    prompt: string,
+    images: UploadedImage[]
+  ) {
+    if (current.isGenerating) return;
+
+    const validation = validateFlowithConfig(flowithConfig);
+    if (!validation.valid) {
+      setCurrent(prev => ({ ...prev, error: validation.error }));
+      return;
+    }
+
+    const startTime = Date.now();
+
+    if (!currentSessionId) {
+      setCurrentSessionId(`${Date.now()}`);
+    }
+
+    setConversation(prev => [...prev, {
+      role: 'user',
+      prompt: prompt || undefined,
+      images: images.length > 0 ? images : undefined,
+      thoughts: [],
+      outputs: [],
+      aspectRatio,
+      resolution,
+      timestamp: new Date(),
+    }]);
+
+    setCurrent({
+      thoughts: [],
+      outputs: [],
+      isGenerating: true,
+      phase: 'generating',
+      startTime,
+    });
+
+    setLastPrompt(prompt);
+    setLastImages(images);
+    setFlowithProgress('uploading');
+
+    try {
+      const uploadedFlowithImages: Array<{ url: string; filename: string }> = [];
+      const imagesWithFlowithUrls: UploadedImage[] = [];
+      
+      for (const img of images) {
+        if (img.dataUrl) {
+          const url = await uploadImageFromDataUrl(
+            img.dataUrl,
+            img.name || `image-${img.id}.png`,
+            flowithConfig.token
+          );
+          uploadedFlowithImages.push({ url, filename: img.name || `image-${img.id}.png` });
+          imagesWithFlowithUrls.push({ ...img, flowithFileUrl: url });
+        } else {
+          imagesWithFlowithUrls.push(img);
+        }
+      }
+
+      // Update the user turn with Flowith file URLs for reply context reconstruction
+      if (imagesWithFlowithUrls.length > 0) {
+        setConversation(prev => {
+          const newConv = [...prev];
+          const lastIdx = newConv.length - 1;
+          if (lastIdx >= 0 && newConv[lastIdx].role === 'user') {
+            newConv[lastIdx] = { ...newConv[lastIdx], images: imagesWithFlowithUrls };
+          }
+          return newConv;
+        });
+      }
+
+      setFlowithProgress('processing');
+
+      const historyToUse = flowithReplyContext ? flowithReplyContext.history : flowithConversationHistory;
+
+      const result = await flowithGenerateImage(
+        flowithConfig,
+        {
+          prompt,
+          aspectRatio: mapAspectRatioToFlowith(aspectRatio),
+          imageSize: mapResolutionToFlowith(resolution),
+          images: uploadedFlowithImages.length > 0 ? uploadedFlowithImages : undefined,
+          conversationHistory: historyToUse.length > 0 ? historyToUse : undefined,
+        },
+        (event) => {
+          if (event === 'connected') setFlowithProgress('connected');
+          if (event === 'processing') setFlowithProgress('processing');
+        }
+      );
+
+      const endTime = Date.now();
+
+      if (result.status === 'completed' && result.imageUrl) {
+        const imageDataUrl = await fetchImageAsDataUrl(result.imageUrl);
+        
+        const collectedOutputs: OutputPart[] = [{
+          type: 'image',
+          imageData: imageDataUrl,
+          mimeType: 'image/jpeg',
+          flowithUrl: result.imageUrl,
+        }];
+        setCurrent({
+          thoughts: [],
+          outputs: collectedOutputs,
+          isGenerating: false,
+          phase: 'done',
+          startTime,
+          endTime,
+        });
+
+        setConversation(prev => [...prev, {
+          role: 'model',
+          thoughts: [],
+          outputs: collectedOutputs,
+          aspectRatio,
+          resolution,
+          timestamp: new Date(),
+          generationTime: endTime - startTime,
+        }]);
+
+        const userMessageContent = uploadedFlowithImages.length > 0
+          ? `${prompt}\n\n${uploadedFlowithImages.map(img => `![${img.filename}](${img.url})`).join('\n')}`
+          : prompt;
+
+        setFlowithConversationHistory([
+          ...historyToUse,
+          { content: userMessageContent, role: 'user' as const },
+          { content: result.imageUrl!, role: 'assistant' as const },
+        ]);
+
+        setFlowithReplyContext(null);
+      } else {
+        const errorMsg = getFlowithErrorMessage(result.errorType, result.error);
+        setCurrent(prev => ({ 
+          ...prev, 
+          isGenerating: false, 
+          phase: 'done', 
+          error: errorMsg,
+          errorType: result.errorType,
+        }));
+      }
+
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      setCurrent(prev => ({ ...prev, isGenerating: false, phase: 'done', error: errorMessage }));
+    } finally {
+      setFlowithProgress('idle');
+    }
+  }
+
+  async function generateBulkWithFlowith(prompt: string, images: UploadedImage[]) {
+    if (current.isGenerating) return;
+
+    const validation = validateFlowithConfig(flowithConfig);
+    if (!validation.valid) {
+      setCurrent(prev => ({ ...prev, error: validation.error }));
+      return;
+    }
+
+    const startTime = Date.now();
+
+    if (!currentSessionId) {
+      setCurrentSessionId(`${Date.now()}`);
+    }
+
+    setConversation(prev => [...prev, {
+      role: 'user',
+      prompt: prompt || undefined,
+      images: images.length > 0 ? images : undefined,
+      thoughts: [],
+      outputs: [],
+      aspectRatio,
+      resolution,
+      timestamp: new Date(),
+    }]);
+
+    setCurrent({
+      thoughts: [],
+      outputs: [],
+      isGenerating: true,
+      phase: 'generating',
+      startTime,
+    });
+
+    setLastPrompt(prompt);
+    setLastImages(images);
+    setFlowithProgress('uploading');
+
+    const initialResults = Array.from({ length: bulkCount }, (_, i) => ({
+      id: `bulk-${Date.now()}-${i}`,
+      status: 'pending' as const,
+      outputs: [] as OutputPart[],
+      thoughts: [] as ThoughtPart[],
+    }));
+    setBulkResults(initialResults);
+
+    try {
+      const uploadedFlowithImages: Array<{ url: string; filename: string }> = [];
+      const imagesWithFlowithUrls: UploadedImage[] = [];
+      
+      for (const img of images) {
+        if (img.dataUrl) {
+          const url = await uploadImageFromDataUrl(
+            img.dataUrl,
+            img.name || `image-${img.id}.png`,
+            flowithConfig.token
+          );
+          uploadedFlowithImages.push({ url, filename: img.name || `image-${img.id}.png` });
+          imagesWithFlowithUrls.push({ ...img, flowithFileUrl: url });
+        } else {
+          imagesWithFlowithUrls.push(img);
+        }
+      }
+
+      if (imagesWithFlowithUrls.length > 0) {
+        setConversation(prev => {
+          const newConv = [...prev];
+          const lastIdx = newConv.length - 1;
+          if (lastIdx >= 0 && newConv[lastIdx].role === 'user') {
+            newConv[lastIdx] = { ...newConv[lastIdx], images: imagesWithFlowithUrls };
+          }
+          return newConv;
+        });
+      }
+
+      setFlowithProgress('processing');
+
+      const results = await flowithGenerateBatch(
+        flowithConfig,
+        {
+          prompt,
+          aspectRatio: mapAspectRatioToFlowith(aspectRatio),
+          imageSize: mapResolutionToFlowith(resolution),
+          images: uploadedFlowithImages.length > 0 ? uploadedFlowithImages : undefined,
+        },
+        bulkCount,
+        async (index, event, result) => {
+          if (event === 'started') {
+            setBulkResults(prev => prev.map((r, i) => 
+              i === index ? { ...r, status: 'generating' as const } : r
+            ));
+          } else if (event === 'completed' && result?.imageUrl) {
+            try {
+              const imageDataUrl = await fetchImageAsDataUrl(result.imageUrl);
+              setBulkResults(prev => prev.map((r, i) => 
+                i === index ? {
+                  ...r,
+                  status: 'done' as const,
+                  outputs: [{ type: 'image' as const, imageData: imageDataUrl, mimeType: 'image/jpeg' }],
+                  generationTime: result.generationTime,
+                } : r
+              ));
+            } catch {
+              setBulkResults(prev => prev.map((r, i) => 
+                i === index ? { ...r, status: 'error' as const, error: 'Failed to fetch image' } : r
+              ));
+            }
+          } else if (event === 'error') {
+            const errorMsg = getFlowithErrorMessage(result?.errorType, result?.error);
+            setBulkResults(prev => prev.map((r, i) => 
+              i === index ? { ...r, status: 'error' as const, error: errorMsg, errorType: result?.errorType } : r
+            ));
+          }
+        }
+      );
+
+      const endTime = Date.now();
+
+      const allOutputs: OutputPart[] = [];
+      for (const r of results) {
+        if (r.status === 'completed' && r.imageUrl) {
+          try {
+            const imageDataUrl = await fetchImageAsDataUrl(r.imageUrl);
+            allOutputs.push({
+              type: 'image' as const,
+              imageData: imageDataUrl,
+              mimeType: 'image/jpeg',
+            });
+          } catch (e) {
+            console.error('Failed to fetch image:', r.imageUrl, e);
+          }
+        }
+      }
+
+      if (allOutputs.length > 0) {
+        setConversation(prev => [...prev, {
+          role: 'model',
+          thoughts: [],
+          outputs: allOutputs,
+          aspectRatio,
+          resolution,
+          timestamp: new Date(),
+          generationTime: endTime - startTime,
+        }]);
+      }
+
+      setCurrent({
+        thoughts: [],
+        outputs: [],
+        isGenerating: false,
+        phase: 'done',
+        startTime,
+        endTime,
+      });
+
+      setTimeout(() => setBulkResults([]), 500);
+
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      setCurrent(prev => ({ ...prev, isGenerating: false, phase: 'done', error: errorMessage }));
+    } finally {
+      setFlowithProgress('idle');
+    }
+  }
+
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     if ((!input.trim() && uploadedImages.length === 0) || current.isGenerating) return;
@@ -958,10 +1314,18 @@ export function Chat() {
     setInput('');
     setUploadedImages([]);
     
-    if (bulkCount > 1) {
-      await generateBulk(prompt, images);
+    if (generationMode === 'flowith') {
+      if (bulkCount > 1) {
+        await generateBulkWithFlowith(prompt, images);
+      } else {
+        await generateWithFlowith(prompt, images);
+      }
     } else {
-      await generateWithParams(prompt, images, true);
+      if (bulkCount > 1) {
+        await generateBulk(prompt, images);
+      } else {
+        await generateWithParams(prompt, images, true);
+      }
     }
   }
 
@@ -987,11 +1351,18 @@ export function Chat() {
         return prev.slice(0, historyEntriesToKeep);
       });
       
-      // Respect current bulkCount setting
-      if (bulkCount > 1) {
-        await generateBulk(prompt, images);
+      if (generationMode === 'flowith') {
+        if (bulkCount > 1) {
+          await generateBulkWithFlowith(prompt, images);
+        } else {
+          await generateWithFlowith(prompt, images);
+        }
       } else {
-        await generateWithParams(prompt, images, true);
+        if (bulkCount > 1) {
+          await generateBulk(prompt, images);
+        } else {
+          await generateWithParams(prompt, images, true);
+        }
       }
       return;
     }
@@ -1004,11 +1375,18 @@ export function Chat() {
       setConversationHistory(prev => prev.slice(0, -2));
     }
     
-    // Respect current bulkCount setting
-    if (bulkCount > 1) {
-      await generateBulk(lastPrompt, lastImages);
+    if (generationMode === 'flowith') {
+      if (bulkCount > 1) {
+        await generateBulkWithFlowith(lastPrompt, lastImages);
+      } else {
+        await generateWithFlowith(lastPrompt, lastImages);
+      }
     } else {
-      await generateWithParams(lastPrompt, lastImages, true);
+      if (bulkCount > 1) {
+        await generateBulk(lastPrompt, lastImages);
+      } else {
+        await generateWithParams(lastPrompt, lastImages, true);
+      }
     }
   }
 
@@ -1029,11 +1407,18 @@ export function Chat() {
       return prev.slice(0, historyEntriesToKeep);
     });
     
-    // Generate with current settings
-    if (bulkCount > 1) {
-      await generateBulk(prompt, images);
+    if (generationMode === 'flowith') {
+      if (bulkCount > 1) {
+        await generateBulkWithFlowith(prompt, images);
+      } else {
+        await generateWithFlowith(prompt, images);
+      }
     } else {
-      await generateWithParams(prompt, images, true);
+      if (bulkCount > 1) {
+        await generateBulk(prompt, images);
+      } else {
+        await generateWithParams(prompt, images, true);
+      }
     }
   }
 
@@ -1051,6 +1436,147 @@ export function Chat() {
       isGenerating: false,
       phase: 'idle',
     });
+    setFlowithConversationHistory([]);
+    setFlowithReplyContext(null);
+    setLocalReplyContext(null);
+  }
+
+  function handleSelectFlowithReply(output: OutputPart, _userPrompt: string, turnIdx: number) {
+    if (!output.flowithUrl || !output.imageData) return;
+
+    if (flowithReplyContext?.imageUrl === output.flowithUrl) {
+      setFlowithReplyContext(null);
+      return;
+    }
+
+    const historyUpToThisPoint: FlowithMessage[] = [];
+    for (let i = 0; i <= turnIdx; i++) {
+      const turn = conversation[i];
+      if (turn.role === 'user') {
+        let userContent = turn.prompt || '';
+        if (turn.images && turn.images.length > 0) {
+          const imageMarkdown = turn.images
+            .filter(img => img.flowithFileUrl)
+            .map(img => `![${img.name}](${img.flowithFileUrl})`)
+            .join('\n');
+          if (imageMarkdown) {
+            userContent = userContent ? `${userContent}\n\n${imageMarkdown}` : imageMarkdown;
+          }
+        }
+        if (userContent) {
+          historyUpToThisPoint.push({ content: userContent, role: 'user' });
+        }
+      } else if (turn.role === 'model') {
+        const imageOutput = turn.outputs.find(o => o.type === 'image' && o.flowithUrl);
+        if (imageOutput?.flowithUrl) {
+          historyUpToThisPoint.push({ content: imageOutput.flowithUrl, role: 'assistant' });
+        }
+      }
+    }
+
+    setFlowithReplyContext({
+      imageUrl: output.flowithUrl,
+      imageDataUrl: output.imageData,
+      history: historyUpToThisPoint,
+    });
+
+    textareaRef.current?.focus();
+  }
+
+  function handleClearFlowithReply() {
+    setFlowithReplyContext(null);
+  }
+
+  async function handleSelectLocalReply(output: OutputPart, turnIdx: number) {
+    if (!output.imageData) return;
+
+    if (localReplyContext?.imageDataUrl === output.imageData) {
+      setLocalReplyContext(null);
+      return;
+    }
+
+    const historyUpToThisPoint: Content[] = [];
+    for (let i = 0; i <= turnIdx; i++) {
+      const turn = conversation[i];
+      const parts: Part[] = [];
+      
+      if (turn.role === 'user') {
+        if (turn.prompt) {
+          parts.push({ text: turn.prompt });
+        }
+        if (turn.images) {
+          for (const img of turn.images) {
+            if (img.dataUrl) {
+              let base64: string | undefined;
+              
+              if (img.dataUrl.startsWith('data:')) {
+                base64 = img.dataUrl.split(',')[1];
+              } else {
+                const dataUrl = await fetchImageAsDataUrl(img.dataUrl);
+                base64 = dataUrl.split(',')[1];
+              }
+              
+              if (base64) {
+                parts.push({
+                  inlineData: {
+                    mimeType: img.mimeType,
+                    data: base64,
+                  }
+                });
+              }
+            }
+          }
+        }
+      } else if (turn.role === 'model') {
+        for (const out of turn.outputs) {
+          if (out.type === 'text' && out.text) {
+            const textPart: Record<string, unknown> = { text: out.text };
+            if (out.signature) {
+              textPart.thoughtSignature = out.signature;
+            }
+            parts.push(textPart as Part);
+          } else if (out.type === 'image' && out.imageData) {
+            let base64: string | undefined;
+            
+            if (out.imageData.startsWith('data:')) {
+              base64 = out.imageData.split(',')[1];
+            } else {
+              const dataUrl = await fetchImageAsDataUrl(out.imageData);
+              base64 = dataUrl.split(',')[1];
+            }
+            
+            if (base64) {
+              const imagePart: Record<string, unknown> = {
+                inlineData: {
+                  mimeType: out.mimeType || 'image/png',
+                  data: base64,
+                }
+              };
+              if (out.signature) {
+                imagePart.thoughtSignature = out.signature;
+              }
+              parts.push(imagePart as Part);
+            }
+          }
+        }
+      }
+      
+      if (parts.length > 0) {
+        historyUpToThisPoint.push({ role: turn.role, parts });
+      }
+    }
+
+    setLocalReplyContext({
+      imageDataUrl: output.imageData,
+      turnIdx,
+      history: historyUpToThisPoint,
+    });
+
+    textareaRef.current?.focus();
+  }
+
+  function handleClearLocalReply() {
+    setLocalReplyContext(null);
   }
 
   // Prompt preset management
@@ -1252,11 +1778,18 @@ export function Chat() {
     setEditInput('');
     setEditImages([]);
     
-    // Generate with current settings (not original)
-    if (bulkCount > 1) {
-      await generateBulk(newPrompt, newImages);
+    if (generationMode === 'flowith') {
+      if (bulkCount > 1) {
+        await generateBulkWithFlowith(newPrompt, newImages);
+      } else {
+        await generateWithFlowith(newPrompt, newImages);
+      }
     } else {
-      await generateWithParams(newPrompt, newImages, true);
+      if (bulkCount > 1) {
+        await generateBulk(newPrompt, newImages);
+      } else {
+        await generateWithParams(newPrompt, newImages, true);
+      }
     }
     
     // After generation completes, update the user turn to include versions
@@ -1393,14 +1926,24 @@ export function Chat() {
         }
         if (turn.images) {
           for (const img of turn.images) {
-            const base64 = img.dataUrl?.split(',')[1];
-            if (base64) {
-              parts.push({
-                inlineData: {
-                  mimeType: img.mimeType,
-                  data: base64,
-                }
-              });
+            if (img.dataUrl) {
+              let base64: string | undefined;
+              
+              if (img.dataUrl.startsWith('data:')) {
+                base64 = img.dataUrl.split(',')[1];
+              } else {
+                const dataUrl = await fetchImageAsDataUrl(img.dataUrl);
+                base64 = dataUrl.split(',')[1];
+              }
+              
+              if (base64) {
+                parts.push({
+                  inlineData: {
+                    mimeType: img.mimeType,
+                    data: base64,
+                  }
+                });
+              }
             }
           }
         }
@@ -1414,23 +1957,15 @@ export function Chat() {
             }
             parts.push(textPart as Part);
           } else if (output.type === 'image' && output.imageData) {
-            let base64 = '';
+            let base64: string | undefined;
+            
             if (output.imageData.startsWith('data:')) {
               base64 = output.imageData.split(',')[1];
-            } else if (output.storageId) {
-              try {
-                const response = await fetch(output.imageData);
-                const blob = await response.blob();
-                const reader = new FileReader();
-                const dataUrl = await new Promise<string>((resolve) => {
-                  reader.onloadend = () => resolve(reader.result as string);
-                  reader.readAsDataURL(blob);
-                });
-                base64 = dataUrl.split(',')[1];
-              } catch (e) {
-                console.error('Failed to load image for history:', e);
-              }
+            } else {
+              const dataUrl = await fetchImageAsDataUrl(output.imageData);
+              base64 = dataUrl.split(',')[1];
             }
+            
             if (base64) {
               // MUST include thoughtSignature for model-generated images
               const imagePart: Record<string, unknown> = {
@@ -1452,21 +1987,6 @@ export function Chat() {
         history.push({ role: turn.role, parts });
       }
     }
-    
-    console.log('[DEBUG] Rebuilt conversation history:', JSON.stringify(
-      history.map(c => ({
-        role: c.role,
-        parts: (c.parts || []).map((p) => {
-          const part = p as Record<string, unknown>;
-          return {
-            hasText: !!part.text,
-            hasImage: !!part.inlineData,
-            hasSignature: !!part.thoughtSignature,
-          };
-        })
-      })),
-      null, 2
-    ));
     
     setConversationHistory(history);
   }
@@ -1529,9 +2049,38 @@ export function Chat() {
         {activeTab === 'config' && (
           <>
             <div className="config-section">
-              <label className="config-label">MODEL</label>
-              <div className="config-value config-mono">{MODEL_ID}</div>
+              <label className="config-label">MODE</label>
+              <div className="mode-switcher">
+                <button
+                  type="button"
+                  className={`mode-btn ${generationMode === 'local' ? 'active' : ''}`}
+                  onClick={() => setGenerationMode('local')}
+                >
+                  Local Proxy
+                </button>
+                <button
+                  type="button"
+                  className={`mode-btn ${generationMode === 'flowith' ? 'active' : ''}`}
+                  onClick={() => setGenerationMode('flowith')}
+                >
+                  Flowith
+                </button>
+              </div>
             </div>
+
+            {generationMode === 'local' && (
+              <div className="config-section">
+                <label className="config-label">MODEL</label>
+                <div className="config-value config-mono">{MODEL_ID}</div>
+              </div>
+            )}
+
+            {generationMode === 'flowith' && (
+              <FlowithConfig 
+                config={flowithConfig} 
+                onConfigChange={setFlowithConfig} 
+              />
+            )}
 
             <div className="config-section">
               <label className="config-label">RESOLUTION</label>
@@ -1568,17 +2117,19 @@ export function Chat() {
               </div>
             </div>
 
-            <div className="config-section">
-              <label className="config-label">GROUNDING</label>
-              <button
-                type="button"
-                onClick={() => setUseGrounding(!useGrounding)}
-                className={`toggle-btn ${useGrounding ? 'active' : ''}`}
-              >
-                <span className="toggle-icon">{useGrounding ? '◉' : '○'}</span>
-                <span className="toggle-text">Google Search</span>
-              </button>
-            </div>
+            {generationMode === 'local' && (
+              <div className="config-section">
+                <label className="config-label">GROUNDING</label>
+                <button
+                  type="button"
+                  onClick={() => setUseGrounding(!useGrounding)}
+                  className={`toggle-btn ${useGrounding ? 'active' : ''}`}
+                >
+                  <span className="toggle-icon">{useGrounding ? '◉' : '○'}</span>
+                  <span className="toggle-text">Google Search</span>
+                </button>
+              </div>
+            )}
 
             <div className="config-section">
               <label className="config-label">BULK GENERATE</label>
@@ -2054,6 +2605,34 @@ export function Chat() {
                                 >
                                   ↻ Regen
                                 </button>
+                                {generationMode === 'flowith' && output.flowithUrl && (
+                                  <button
+                                    type="button"
+                                    className={`img-action-btn reply ${flowithReplyContext?.imageUrl === output.flowithUrl ? 'active' : ''}`}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleSelectFlowithReply(output, prompt || '', idx);
+                                    }}
+                                    disabled={current.isGenerating}
+                                    title="Reply to this image"
+                                  >
+                                    ↩ Reply
+                                  </button>
+                                )}
+                                {generationMode === 'local' && output.imageData && (
+                                  <button
+                                    type="button"
+                                    className={`img-action-btn reply ${localReplyContext?.imageDataUrl === output.imageData ? 'active' : ''}`}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleSelectLocalReply(output, idx);
+                                    }}
+                                    disabled={current.isGenerating}
+                                    title="Reply to this image"
+                                  >
+                                    ↩ Reply
+                                  </button>
+                                )}
                               </div>
                             </figcaption>
                           </figure>
@@ -2078,7 +2657,8 @@ export function Chat() {
                     {bulkResults.map((result, idx) => (
                       <div 
                         key={result.id} 
-                        className={`bulk-slot ${result.status}`}
+                        className={`bulk-slot ${result.status} ${result.errorType ? `error-${result.errorType}` : ''}`}
+                        title={result.error || undefined}
                       >
                         {result.status === 'pending' && <span className="slot-icon">◯</span>}
                         {result.status === 'generating' && <span className="slot-icon spinning">◐</span>}
@@ -2090,7 +2670,16 @@ export function Chat() {
                         ) : result.status === 'done' ? (
                           <span className="slot-icon">✓</span>
                         ) : null}
-                        {result.status === 'error' && <span className="slot-icon error">✕</span>}
+                        {result.status === 'error' && (
+                          <div className="slot-error">
+                            <span className="slot-icon error">
+                              {result.errorType === 'content_policy' ? '🚫' : '✕'}
+                            </span>
+                            <span className="slot-error-type">
+                              {result.errorType === 'content_policy' ? 'Blocked' : 'Failed'}
+                            </span>
+                          </div>
+                        )}
                         <span className="slot-label">#{idx + 1}</span>
                       </div>
                     ))}
@@ -2100,16 +2689,44 @@ export function Chat() {
               ) : (
                 <div className="streaming-badge large">
                   <span className="pulse"></span>
-                  GENERATING... {(elapsedTime / 1000).toFixed(1)}s
+                  {generationMode === 'flowith' && flowithProgress !== 'idle' ? (
+                    <>
+                      {flowithProgress === 'uploading' && 'UPLOADING IMAGES...'}
+                      {flowithProgress === 'connected' && 'CONNECTED...'}
+                      {flowithProgress === 'processing' && 'GENERATING...'}
+                    </>
+                  ) : (
+                    'GENERATING...'
+                  )} {(elapsedTime / 1000).toFixed(1)}s
                 </div>
               )}
             </div>
           )}
 
           {current.error && (
-            <div className="error-banner">
-              <span className="error-icon">!</span>
-              {current.error}
+            <div className={`error-banner ${current.errorType ? `error-${current.errorType}` : ''}`}>
+              <span className="error-icon">
+                {current.errorType === 'content_policy' ? '🚫' : '!'}
+              </span>
+              <div className="error-content">
+                <span className="error-message">{current.error}</span>
+                {generationMode === 'flowith' && lastPrompt && (
+                  <button
+                    type="button"
+                    className="error-retry-btn"
+                    onClick={() => {
+                      setCurrent(prev => ({ ...prev, error: undefined, errorType: undefined }));
+                      if (bulkCount > 1) {
+                        generateBulkWithFlowith(lastPrompt, lastImages);
+                      } else {
+                        generateWithFlowith(lastPrompt, lastImages);
+                      }
+                    }}
+                  >
+                    ↻ Retry
+                  </button>
+                )}
+              </div>
             </div>
           )}
         </div>
@@ -2118,6 +2735,46 @@ export function Chat() {
           {lastModelTurn && lastModelTurn.outputs.some(o => o.type === 'image') && (
             <div className="edit-hint">
               Continue editing or paste/upload new reference images
+            </div>
+          )}
+
+          {flowithReplyContext && generationMode === 'flowith' && (
+            <div className="flowith-reply-context">
+              <div className="reply-context-header">
+                <span className="reply-label">↩ Replying to:</span>
+                <button 
+                  type="button" 
+                  className="clear-reply-btn"
+                  onClick={handleClearFlowithReply}
+                  disabled={current.isGenerating}
+                >
+                  ×
+                </button>
+              </div>
+              <div className="reply-preview">
+                <img src={flowithReplyContext.imageDataUrl} alt="Reply context" />
+                <span className="reply-info">{flowithReplyContext.history.length} messages in context</span>
+              </div>
+            </div>
+          )}
+
+          {localReplyContext && generationMode === 'local' && (
+            <div className="flowith-reply-context">
+              <div className="reply-context-header">
+                <span className="reply-label">↩ Replying to:</span>
+                <button 
+                  type="button" 
+                  className="clear-reply-btn"
+                  onClick={handleClearLocalReply}
+                  disabled={current.isGenerating}
+                >
+                  ×
+                </button>
+              </div>
+              <div className="reply-preview">
+                <img src={localReplyContext.imageDataUrl} alt="Reply context" />
+                <span className="reply-info">{localReplyContext.history.length} turns in context</span>
+              </div>
             </div>
           )}
 

@@ -47,6 +47,7 @@ export interface OutputPart {
   mimeType?: string;
   signature?: string;
   storageId?: string | null;
+  flowithUrl?: string;
 }
 
 export interface ParsedResponse {
@@ -61,6 +62,7 @@ export interface UploadedImage {
   mimeType: string;
   name: string;
   storageId?: string | null;
+  flowithFileUrl?: string;
 }
 
 export function parseResponseParts(parts: Part[]): ParsedResponse {
