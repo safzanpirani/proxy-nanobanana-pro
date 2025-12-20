@@ -2,7 +2,6 @@ import { useState, useRef, useEffect, type FormEvent, type ChangeEvent, type Cli
 import { client, MODEL_ID, ASPECT_RATIOS, RESOLUTIONS, createImagePart, Modality, type AspectRatio, type Resolution, type ThoughtPart, type OutputPart, type Content, type UploadedImage, type Part } from '../lib/ai';
 import * as storage from '../lib/storage';
 import { FlowithConfig, loadFlowithConfig, saveFlowithConfig } from './FlowithConfig';
-import { PromptChat } from './PromptChat';
 import {
   type FlowithConfig as FlowithConfigType,
   type FlowithAspectRatio,
@@ -331,8 +330,6 @@ export function Chat() {
   
   const [copiedPromptIdx, setCopiedPromptIdx] = useState<number | null>(null);
   
-  const [viewMode, setViewMode] = useState<'image' | 'chat'>('image');
-  
   // Default prompt presets
   const DEFAULT_PRESETS: Array<{ name: string; prompt: string }> = [
     // Master Template
@@ -347,7 +344,7 @@ export function Chat() {
     // Dating - Women
     { name: "💖 Golden Hour (F)", prompt: "Selfie of the woman from image 1 taken during sunset, warm orange light hitting her face directly. Lens flare, wind blowing hair across her face slightly. She is wearing a sundress. detailed skin pores, no makeup look, 'sun-kissed' filter aesthetic, horizon line slightly crooked." },
     { name: "💖 Brunch Date (F)", prompt: "Across-the-table iPhone shot of the woman from image 1 holding a mimosa, sitting in a trendy restaurant with plants in the background. Natural window lighting from the side. She is laughing with eyes slightly closed. High definition, bright colors, plate of food in the foreground out of focus." },
-    { name: "💖 Gym Mirror (F)", prompt: "Full body mirror selfie of the woman from image 1 in a gym locker room. Fluorescent overhead lights, wearing matching workout set. She is holding the phone covering half her face. Background includes a whiteboard and office chair. 'Work from home' vibe, slightly grainy." },
+    { name: "💖 Gym Mirror (F)", prompt: "Full body mirror selfie of the woman from image 1 in a gym locker room. Fluorescent overhead lights, wearing matching workout set. She is holding the phone covering half her face. Realistic gym background with lockers, slight digital noise, sharp focus on the outfit and posture." },
     { name: "💖 Museum (F)", prompt: "Candid shot of the woman from image 1 standing in front of a large painting in an art gallery. She is looking back over her shoulder at the camera. Soft, museum spot lighting, quiet atmosphere. She is wearing a stylish trench coat. Minimalist composition, high contrast." },
     { name: "💖 Cozy Home (F)", prompt: "High-angle selfie of the woman from image 1 sitting on a bed with a messy bun, wearing an oversized sweater and knee-high socks. Reading a book, looking up at the camera. Soft morning light, grainy 'film' simulation, messy bedroom background (pillows, blankets)." },
     { name: "💖 Night Out (F)", prompt: "Flash photo of the woman from image 1 standing against a brick wall at night. Hard flash lighting, high contrast, wearing a black evening dress. 'Paparazzi' style, red lipstick, sharp shadows behind her, vignette effect." },
@@ -491,12 +488,12 @@ export function Chat() {
         handleNewSession();
       }
       
-      // Alt+1/2/3/4 - Quick bulk count selection
+      // Alt+1/2/3/4 - Quick bulk count selection (1x, 2x, 4x, 8x)
       if (e.altKey && !current.isGenerating) {
         if (e.key === '1') { e.preventDefault(); setBulkCount(1); }
         if (e.key === '2') { e.preventDefault(); setBulkCount(2); }
-        if (e.key === '4') { e.preventDefault(); setBulkCount(4); }
-        if (e.key === '8') { e.preventDefault(); setBulkCount(8); }
+        if (e.key === '3') { e.preventDefault(); setBulkCount(4); }
+        if (e.key === '4') { e.preventDefault(); setBulkCount(8); }
       }
       
       // Arrow keys for lightbox navigation
@@ -1027,8 +1024,8 @@ export function Chat() {
         }
       }
 
-      setConversationHistory([
-        ...conversationHistory,
+      setConversationHistory(prev => [
+        ...prev,
         { role: 'user', parts: userParts },
         { role: 'model', parts: modelParts }
       ]);
@@ -1372,8 +1369,7 @@ export function Chat() {
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    if (!input.trim() && uploadedImages.length === 0) return;
-    if (current.isGenerating && generationMode !== 'flowith') return;
+    if ((!input.trim() && uploadedImages.length === 0) || current.isGenerating) return;
 
     const prompt = input.trim();
     const images = [...uploadedImages];
@@ -2064,7 +2060,7 @@ export function Chat() {
     : null;
 
   const lastModelTurn = [...conversation].reverse().find(t => t.role === 'model');
-  const canSubmit = (input.trim() || uploadedImages.length > 0) && (generationMode === 'flowith' || !current.isGenerating);
+  const canSubmit = (input.trim() || uploadedImages.length > 0) && !current.isGenerating;
 
   const filteredPresets = presetSearch.trim()
     ? promptPresets.filter(p => 
@@ -2132,28 +2128,6 @@ export function Chat() {
                   onClick={() => setGenerationMode('flowith')}
                 >
                   Flowith
-                </button>
-              </div>
-            </div>
-
-            <div className="config-section">
-              <label className="config-label">VIEW</label>
-              <div className="chat-mode-toggle">
-                <button
-                  type="button"
-                  className={`chat-mode-btn ${viewMode === 'image' ? 'active' : ''}`}
-                  onClick={() => setViewMode('image')}
-                >
-                  <span className="mode-icon">🖼️</span>
-                  IMAGE GEN
-                </button>
-                <button
-                  type="button"
-                  className={`chat-mode-btn ${viewMode === 'chat' ? 'active' : ''}`}
-                  onClick={() => setViewMode('chat')}
-                >
-                  <span className="mode-icon">💬</span>
-                  PROMPT CHAT
                 </button>
               </div>
             </div>
@@ -2397,607 +2371,596 @@ export function Chat() {
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
       >
-        {viewMode === 'chat' ? (
-          <PromptChat 
-            onUsePrompt={(prompt) => {
-              setInput(prompt);
-              setViewMode('image');
-              textareaRef.current?.focus();
-            }}
-          />
-        ) : (
-          <>
-            {/* Top-right new session button */}
-            <button 
-              type="button"
-              className="new-session-fab"
-              onClick={handleNewSession}
-              title="New Session"
-            >
-              <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-                <line x1="10" y1="4" x2="10" y2="16" />
-                <line x1="4" y1="10" x2="16" y2="10" />
-              </svg>
-            </button>
+        {/* Top-right new session button */}
+        <button 
+          type="button"
+          className="new-session-fab"
+          onClick={handleNewSession}
+          title="New Session"
+        >
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+            <line x1="10" y1="4" x2="10" y2="16" />
+            <line x1="4" y1="10" x2="16" y2="10" />
+          </svg>
+        </button>
 
-            {/* Drag overlay */}
-            {isDragging && (
-              <div className="drag-overlay">
-                <div className="drag-overlay-content">
-                  <span className="drag-icon">📷</span>
-                  <span className="drag-text">Drop images here</span>
-                  <span className="drag-hint">Up to {14 - uploadedImages.length} more images</span>
-                </div>
+        {/* Drag overlay */}
+        {isDragging && (
+          <div className="drag-overlay">
+            <div className="drag-overlay-content">
+              <span className="drag-icon">📷</span>
+              <span className="drag-text">Drop images here</span>
+              <span className="drag-hint">Up to {14 - uploadedImages.length} more images</span>
+            </div>
+          </div>
+        )}
+        
+        <div className="conversation-area" ref={outputRef}>
+          {conversation.length === 0 && current.phase === 'idle' && (
+            <div className="empty-state">
+              <div className="empty-icon">◈</div>
+              <h2>Gemini 3 Pro Image</h2>
+              <p>Generate and edit images with multi-turn conversation. Drag & drop, paste (Ctrl+V), or upload reference images.</p>
+              <div className="feature-tags">
+                <span className="feature-tag">Drag & Drop</span>
+                <span className="feature-tag">Paste from Clipboard</span>
+                <span className="feature-tag">Session History</span>
+                <span className="feature-tag">4K Output</span>
               </div>
-            )}
-            
-            <div className="conversation-area" ref={outputRef}>
-              {conversation.length === 0 && current.phase === 'idle' && (
-                <div className="empty-state">
-                  <div className="empty-icon">◈</div>
-                  <h2>Gemini 3 Pro Image</h2>
-                  <p>Generate and edit images with multi-turn conversation. Drag & drop, paste (Ctrl+V), or upload reference images.</p>
-                  <div className="feature-tags">
-                    <span className="feature-tag">Drag & Drop</span>
-                    <span className="feature-tag">Paste from Clipboard</span>
-                    <span className="feature-tag">Session History</span>
-                    <span className="feature-tag">4K Output</span>
+            </div>
+          )}
+
+          {/* Legacy session warning */}
+          {legacySessionWarning && (
+            <div className="legacy-warning">
+              <span className="warning-icon">⚠</span>
+              <span>This session was created before signature support. Multi-turn editing may not work. Consider starting a new session.</span>
+              <button 
+                type="button" 
+                className="dismiss-warning"
+                onClick={() => setLegacySessionWarning(false)}
+              >
+                ×
+              </button>
+            </div>
+          )}
+
+          {conversation.map((turn, idx) => (
+            <div key={idx} className={`turn turn-${turn.role}`}>
+              {turn.role === 'user' && (
+                <div className="user-message">
+                  <div className="message-meta">
+                    <span className="role-label">YOU</span>
+                    <span className="turn-config">{turn.resolution} · {turn.aspectRatio}</span>
+                    
+                    {/* Version navigation for branched messages */}
+                    {turn.versions && turn.versions.length > 0 && (
+                      <div className="version-nav">
+                        <button
+                          type="button"
+                          className="version-btn"
+                          onClick={() => handleVersionChange(idx, 'prev')}
+                          disabled={(turn.selectedVersion ?? turn.versions.length) === 0 || current.isGenerating}
+                        >
+                          ‹
+                        </button>
+                        <span className="version-indicator">
+                          {(turn.selectedVersion ?? turn.versions.length) + 1} / {turn.versions.length + 1}
+                        </span>
+                        <button
+                          type="button"
+                          className="version-btn"
+                          onClick={() => handleVersionChange(idx, 'next')}
+                          disabled={(turn.selectedVersion ?? turn.versions.length) === turn.versions.length || current.isGenerating}
+                        >
+                          ›
+                        </button>
+                      </div>
+                    )}
+                    
+                    {/* Edit and Delete buttons */}
+                    <div className="message-actions">
+                      {editingTurnIdx !== idx && (
+                        <>
+                          <button
+                            type="button"
+                            className="msg-action-btn regen"
+                            onClick={() => handleRegenerateFromUserTurn(idx)}
+                            disabled={current.isGenerating}
+                            title="Regenerate with current settings"
+                          >
+                            ↻
+                          </button>
+                          <button
+                            type="button"
+                            className={`msg-action-btn copy ${copiedPromptIdx === idx ? 'copied' : ''}`}
+                            onClick={() => handleCopyPrompt(turn.prompt || '', idx)}
+                            title={copiedPromptIdx === idx ? "Copied!" : "Copy prompt"}
+                          >
+                            {copiedPromptIdx === idx ? '✓' : '⧉'}
+                          </button>
+                          <button
+                            type="button"
+                            className="msg-action-btn edit"
+                            onClick={() => handleStartEdit(idx)}
+                            disabled={current.isGenerating}
+                            title="Edit this message"
+                          >
+                            ✎
+                          </button>
+                          <button
+                            type="button"
+                            className="msg-action-btn delete"
+                            onClick={() => handleDeleteTurn(idx)}
+                            disabled={current.isGenerating}
+                            title="Delete this turn"
+                          >
+                            ✕
+                          </button>
+                        </>
+                      )}
+                    </div>
                   </div>
+                  
+                  {/* Edit mode UI */}
+                  {editingTurnIdx === idx ? (
+                    <div className="edit-mode">
+                      <textarea
+                        className="edit-textarea"
+                        value={editInput}
+                        onChange={(e) => setEditInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                            e.preventDefault();
+                            if (editInput.trim() || editImages.length > 0) {
+                              handleSaveEdit();
+                            }
+                          }
+                          if (e.key === 'Escape') {
+                            handleCancelEdit();
+                          }
+                        }}
+                        placeholder="Edit your message..."
+                        rows={3}
+                      />
+                      {editImages.length > 0 && (
+                        <div className="edit-images">
+                          {editImages.map((img, imgIdx) => (
+                            <div key={imgIdx} className="edit-image-thumb">
+                              {img.dataUrl && <img src={img.dataUrl} alt={img.name} />}
+                              <button
+                                type="button"
+                                className="remove-edit-img"
+                                onClick={() => setEditImages(prev => prev.filter((_, i) => i !== imgIdx))}
+                              >
+                                ×
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      <div className="edit-actions">
+                        <button
+                          type="button"
+                          className="edit-cancel-btn"
+                          onClick={handleCancelEdit}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          className="edit-save-btn"
+                          onClick={handleSaveEdit}
+                          disabled={!editInput.trim() && editImages.length === 0}
+                        >
+                          Save & Regenerate
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      {turn.prompt && <div className="message-content">{turn.prompt}</div>}
+                      {turn.images && turn.images.length > 0 && (
+                        <div className="user-images">
+                          {turn.images.map((img, imgIdx) => (
+                            <div 
+                              key={imgIdx} 
+                              className="user-image-thumb clickable"
+                              onClick={() => img.dataUrl && setLightbox({
+                                imageData: img.dataUrl,
+                                prompt: `Input image: ${img.name}`,
+                                resolution: turn.resolution,
+                                aspectRatio: turn.aspectRatio,
+                                timestamp: turn.timestamp,
+                              })}
+                            >
+                              {img.dataUrl && <img src={img.dataUrl} alt={img.name} />}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </>
+                  )}
                 </div>
               )}
 
-              {/* Legacy session warning */}
-              {legacySessionWarning && (
-                <div className="legacy-warning">
-                  <span className="warning-icon">⚠</span>
-                  <span>This session was created before signature support. Multi-turn editing may not work. Consider starting a new session.</span>
-                  <button 
-                    type="button" 
-                    className="dismiss-warning"
-                    onClick={() => setLegacySessionWarning(false)}
+              {turn.role === 'model' && (
+                <div className="model-message">
+                  {turn.thoughts.length > 0 && (
+                    <details className="thinking-details" open={idx === conversation.length - 1}>
+                      <summary className="thinking-summary">
+                        <span className="thinking-icon">◐</span>
+                        THINKING ({turn.thoughts.length} part{turn.thoughts.length > 1 ? 's' : ''})
+                      </summary>
+                      <div className="thinking-content-wrap">
+                        {turn.thoughts.map((thought, tIdx) => (
+                          <div key={tIdx} className="thought-item">
+                            {thought.type === 'thought-text' && <pre className="thinking-content">{thought.text}</pre>}
+                            {thought.type === 'thought-image' && thought.imageData && (
+                              <div className="thought-image-card">
+                                <img src={thought.imageData} alt={`Draft ${tIdx + 1}`} />
+                                <span className="thought-badge">Draft {tIdx + 1}</span>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+                  )}
+
+                  {turn.outputs.map((output, oIdx) => {
+                    // Find the user prompt that generated this image
+                    const userTurnIdx = conversation.slice(0, idx).reverse().findIndex(t => t.role === 'user');
+                    const userTurn = userTurnIdx !== -1 ? conversation[idx - 1 - userTurnIdx] : undefined;
+                    const prompt = userTurn?.prompt;
+                    
+                    return (
+                      <div key={oIdx} className="output-item">
+                        {output.type === 'text' && output.text && <div className="response-text">{output.text}</div>}
+                        {output.type === 'image' && output.imageData && (
+                          <figure 
+                            className="output-image clickable"
+                            onClick={() => setLightbox({
+                              imageData: output.imageData!,
+                              prompt,
+                              resolution: turn.resolution,
+                              aspectRatio: turn.aspectRatio,
+                              generationTime: turn.generationTime,
+                              timestamp: turn.timestamp,
+                            })}
+                          >
+                            <img src={output.imageData} alt={`Generated ${oIdx + 1}`} />
+                            <figcaption>
+                              <span className="image-meta">{turn.resolution} · {turn.aspectRatio}</span>
+                              <div className="image-actions">
+                                <button
+                                  type="button"
+                                  className="img-action-btn"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    openImageInNewTab(output.imageData!);
+                                  }}
+                                  title="Open in new tab"
+                                >
+                                  ↗ Open
+                                </button>
+                                <button
+                                  type="button"
+                                  className="img-action-btn"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    downloadImage(
+                                      output.imageData!,
+                                      `gemini-${turn.resolution}-${turn.aspectRatio.replace(':', 'x')}-${Date.now()}.webp`
+                                    );
+                                  }}
+                                >
+                                  ↓ Download
+                                </button>
+                                <button
+                                  type="button"
+                                  className="img-action-btn regen"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleRegenerate(idx);
+                                  }}
+                                  disabled={current.isGenerating}
+                                  title="Regenerate this image"
+                                >
+                                  ↻ Regen
+                                </button>
+                                {generationMode === 'flowith' && output.flowithUrl && (
+                                  <button
+                                    type="button"
+                                    className={`img-action-btn reply ${flowithReplyContext?.imageUrl === output.flowithUrl ? 'active' : ''}`}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleSelectFlowithReply(output, prompt || '', idx);
+                                    }}
+                                    disabled={current.isGenerating}
+                                    title="Reply to this image"
+                                  >
+                                    ↩ Reply
+                                  </button>
+                                )}
+                                {generationMode === 'local' && output.imageData && (
+                                  <button
+                                    type="button"
+                                    className={`img-action-btn reply ${localReplyContext?.imageDataUrl === output.imageData ? 'active' : ''}`}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleSelectLocalReply(output, idx);
+                                    }}
+                                    disabled={current.isGenerating}
+                                    title="Reply to this image"
+                                  >
+                                    ↩ Reply
+                                  </button>
+                                )}
+                              </div>
+                            </figcaption>
+                          </figure>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          ))}
+
+          {current.isGenerating && (
+            <div className="generating-indicator">
+              {bulkResults.length > 0 ? (
+                <div className="bulk-progress">
+                  <div className="bulk-progress-header">
+                    <span className="pulse"></span>
+                    GENERATING {bulkResults.filter(r => r.status === 'done').length}/{bulkResults.length}
+                  </div>
+                  <div className="bulk-progress-grid">
+                    {bulkResults.map((result, idx) => (
+                      <div 
+                        key={result.id} 
+                        className={`bulk-slot ${result.status} ${result.errorType ? `error-${result.errorType}` : ''}`}
+                        title={result.error || undefined}
+                      >
+                        {result.status === 'pending' && <span className="slot-icon">◯</span>}
+                        {result.status === 'generating' && <span className="slot-icon spinning">◐</span>}
+                        {result.status === 'done' && result.outputs.find(o => o.type === 'image') ? (
+                          <img 
+                            src={result.outputs.find(o => o.type === 'image')?.imageData} 
+                            alt={`Result ${idx + 1}`} 
+                          />
+                        ) : result.status === 'done' ? (
+                          <span className="slot-icon">✓</span>
+                        ) : null}
+                        {result.status === 'error' && (
+                          <div className="slot-error">
+                            <span className="slot-icon error">
+                              {result.errorType === 'content_policy' ? '🚫' : '✕'}
+                            </span>
+                            <span className="slot-error-type">
+                              {result.errorType === 'content_policy' ? 'Blocked' : 'Failed'}
+                            </span>
+                          </div>
+                        )}
+                        <span className="slot-label">#{idx + 1}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="bulk-timer">{(elapsedTime / 1000).toFixed(1)}s</div>
+                </div>
+              ) : (
+                <div className="streaming-badge large">
+                  <span className="pulse"></span>
+                  {generationMode === 'flowith' && flowithProgress !== 'idle' ? (
+                    <>
+                      {flowithProgress === 'uploading' && 'UPLOADING IMAGES...'}
+                      {flowithProgress === 'connected' && 'CONNECTED...'}
+                      {flowithProgress === 'processing' && 'GENERATING...'}
+                    </>
+                  ) : (
+                    'GENERATING...'
+                  )} {(elapsedTime / 1000).toFixed(1)}s
+                </div>
+              )}
+            </div>
+          )}
+
+          {current.error && (
+            <div className={`error-banner ${current.errorType ? `error-${current.errorType}` : ''}`}>
+              <span className="error-icon">
+                {current.errorType === 'content_policy' ? '🚫' : '!'}
+              </span>
+              <div className="error-content">
+                <span className="error-message">{current.error}</span>
+                {generationMode === 'flowith' && lastPrompt && (
+                  <button
+                    type="button"
+                    className="error-retry-btn"
+                    onClick={() => {
+                      setCurrent(prev => ({ ...prev, error: undefined, errorType: undefined }));
+                      if (bulkCount > 1) {
+                        generateBulkWithFlowith(lastPrompt, lastImages);
+                      } else {
+                        generateWithFlowith(lastPrompt, lastImages);
+                      }
+                    }}
+                  >
+                    ↻ Retry
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <form onSubmit={handleSubmit} className="prompt-form sticky">
+          {lastModelTurn && lastModelTurn.outputs.some(o => o.type === 'image') && (
+            <div className="edit-hint">
+              Continue editing or paste/upload new reference images
+            </div>
+          )}
+
+          {flowithReplyContext && generationMode === 'flowith' && (
+            <div className="flowith-reply-context">
+              <div className="reply-context-header">
+                <span className="reply-label">↩ Replying to:</span>
+                <button 
+                  type="button" 
+                  className="clear-reply-btn"
+                  onClick={handleClearFlowithReply}
+                  disabled={current.isGenerating}
+                >
+                  ×
+                </button>
+              </div>
+              <div className="reply-preview">
+                <img src={flowithReplyContext.imageDataUrl} alt="Reply context" />
+                <span className="reply-info">{flowithReplyContext.history.length} messages in context</span>
+              </div>
+            </div>
+          )}
+
+          {localReplyContext && generationMode === 'local' && (
+            <div className="flowith-reply-context">
+              <div className="reply-context-header">
+                <span className="reply-label">↩ Replying to:</span>
+                <button 
+                  type="button" 
+                  className="clear-reply-btn"
+                  onClick={handleClearLocalReply}
+                  disabled={current.isGenerating}
+                >
+                  ×
+                </button>
+              </div>
+              <div className="reply-preview">
+                <img src={localReplyContext.imageDataUrl} alt="Reply context" />
+                <span className="reply-info">{localReplyContext.history.length} turns in context</span>
+              </div>
+            </div>
+          )}
+
+          {uploadedImages.length > 0 && (
+            <div className="uploaded-images-row">
+              {uploadedImages.map(img => (
+                <div key={img.id} className="uploaded-image-preview">
+                  <img src={img.dataUrl} alt={img.name} />
+                  <button
+                    type="button"
+                    className="remove-image-btn"
+                    onClick={() => removeImage(img.id)}
+                    disabled={current.isGenerating}
                   >
                     ×
                   </button>
                 </div>
-              )}
-
-              {conversation.map((turn, idx) => (
-                <div key={idx} className={`turn turn-${turn.role}`}>
-                  {turn.role === 'user' && (
-                    <div className="user-message">
-                      <div className="message-meta">
-                        <span className="role-label">YOU</span>
-                        <span className="turn-config">{turn.resolution} · {turn.aspectRatio}</span>
-                        
-                        {/* Version navigation for branched messages */}
-                        {turn.versions && turn.versions.length > 0 && (
-                          <div className="version-nav">
-                            <button
-                              type="button"
-                              className="version-btn"
-                              onClick={() => handleVersionChange(idx, 'prev')}
-                              disabled={(turn.selectedVersion ?? turn.versions.length) === 0 || current.isGenerating}
-                            >
-                              ‹
-                            </button>
-                            <span className="version-indicator">
-                              {(turn.selectedVersion ?? turn.versions.length) + 1} / {turn.versions.length + 1}
-                            </span>
-                            <button
-                              type="button"
-                              className="version-btn"
-                              onClick={() => handleVersionChange(idx, 'next')}
-                              disabled={(turn.selectedVersion ?? turn.versions.length) === turn.versions.length || current.isGenerating}
-                            >
-                              ›
-                            </button>
-                          </div>
-                        )}
-                        
-                        {/* Edit and Delete buttons */}
-                        <div className="message-actions">
-                          {editingTurnIdx !== idx && (
-                            <>
-                              <button
-                                type="button"
-                                className="msg-action-btn regen"
-                                onClick={() => handleRegenerateFromUserTurn(idx)}
-                                disabled={current.isGenerating}
-                                title="Regenerate with current settings"
-                              >
-                                ↻
-                              </button>
-                              <button
-                                type="button"
-                                className={`msg-action-btn copy ${copiedPromptIdx === idx ? 'copied' : ''}`}
-                                onClick={() => handleCopyPrompt(turn.prompt || '', idx)}
-                                title={copiedPromptIdx === idx ? "Copied!" : "Copy prompt"}
-                              >
-                                {copiedPromptIdx === idx ? '✓' : '⧉'}
-                              </button>
-                              <button
-                                type="button"
-                                className="msg-action-btn edit"
-                                onClick={() => handleStartEdit(idx)}
-                                disabled={current.isGenerating}
-                                title="Edit this message"
-                              >
-                                ✎
-                              </button>
-                              <button
-                                type="button"
-                                className="msg-action-btn delete"
-                                onClick={() => handleDeleteTurn(idx)}
-                                disabled={current.isGenerating}
-                                title="Delete this turn"
-                              >
-                                ✕
-                              </button>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                      
-                      {/* Edit mode UI */}
-                      {editingTurnIdx === idx ? (
-                        <div className="edit-mode">
-                          <textarea
-                            className="edit-textarea"
-                            value={editInput}
-                            onChange={(e) => setEditInput(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-                                e.preventDefault();
-                                if (editInput.trim() || editImages.length > 0) {
-                                  handleSaveEdit();
-                                }
-                              }
-                              if (e.key === 'Escape') {
-                                handleCancelEdit();
-                              }
-                            }}
-                            placeholder="Edit your message..."
-                            rows={3}
-                          />
-                          {editImages.length > 0 && (
-                            <div className="edit-images">
-                              {editImages.map((img, imgIdx) => (
-                                <div key={imgIdx} className="edit-image-thumb">
-                                  {img.dataUrl && <img src={img.dataUrl} alt={img.name} />}
-                                  <button
-                                    type="button"
-                                    className="remove-edit-img"
-                                    onClick={() => setEditImages(prev => prev.filter((_, i) => i !== imgIdx))}
-                                  >
-                                    ×
-                                  </button>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                          <div className="edit-actions">
-                            <button
-                              type="button"
-                              className="edit-cancel-btn"
-                              onClick={handleCancelEdit}
-                            >
-                              Cancel
-                            </button>
-                            <button
-                              type="button"
-                              className="edit-save-btn"
-                              onClick={handleSaveEdit}
-                              disabled={!editInput.trim() && editImages.length === 0}
-                            >
-                              Save & Regenerate
-                            </button>
-                          </div>
-                        </div>
-                      ) : (
-                        <>
-                          {turn.prompt && <div className="message-content">{turn.prompt}</div>}
-                          {turn.images && turn.images.length > 0 && (
-                            <div className="user-images">
-                              {turn.images.map((img, imgIdx) => (
-                                <div 
-                                  key={imgIdx} 
-                                  className="user-image-thumb clickable"
-                                  onClick={() => img.dataUrl && setLightbox({
-                                    imageData: img.dataUrl,
-                                    prompt: `Input image: ${img.name}`,
-                                    resolution: turn.resolution,
-                                    aspectRatio: turn.aspectRatio,
-                                    timestamp: turn.timestamp,
-                                  })}
-                                >
-                                  {img.dataUrl && <img src={img.dataUrl} alt={img.name} />}
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                        </>
-                      )}
-                    </div>
-                  )}
-
-                  {turn.role === 'model' && (
-                    <div className="model-message">
-                      {turn.thoughts.length > 0 && (
-                        <details className="thinking-details" open={idx === conversation.length - 1}>
-                          <summary className="thinking-summary">
-                            <span className="thinking-icon">◐</span>
-                            THINKING ({turn.thoughts.length} part{turn.thoughts.length > 1 ? 's' : ''})
-                          </summary>
-                          <div className="thinking-content-wrap">
-                            {turn.thoughts.map((thought, tIdx) => (
-                              <div key={tIdx} className="thought-item">
-                                {thought.type === 'thought-text' && <pre className="thinking-content">{thought.text}</pre>}
-                                {thought.type === 'thought-image' && thought.imageData && (
-                                  <div className="thought-image-card">
-                                    <img src={thought.imageData} alt={`Draft ${tIdx + 1}`} />
-                                    <span className="thought-badge">Draft {tIdx + 1}</span>
-                                  </div>
-                                )}
-                              </div>
-                            ))}
-                          </div>
-                        </details>
-                      )}
-
-                      {turn.outputs.map((output, oIdx) => {
-                        // Find the user prompt that generated this image
-                        const userTurnIdx = conversation.slice(0, idx).reverse().findIndex(t => t.role === 'user');
-                        const userTurn = userTurnIdx !== -1 ? conversation[idx - 1 - userTurnIdx] : undefined;
-                        const prompt = userTurn?.prompt;
-                        
-                        return (
-                          <div key={oIdx} className="output-item">
-                            {output.type === 'text' && output.text && <div className="response-text">{output.text}</div>}
-                            {output.type === 'image' && output.imageData && (
-                              <figure 
-                                className="output-image clickable"
-                                onClick={() => setLightbox({
-                                  imageData: output.imageData!,
-                                  prompt,
-                                  resolution: turn.resolution,
-                                  aspectRatio: turn.aspectRatio,
-                                  generationTime: turn.generationTime,
-                                  timestamp: turn.timestamp,
-                                })}
-                              >
-                                <img src={output.imageData} alt={`Generated ${oIdx + 1}`} />
-                                <figcaption>
-                                  <span className="image-meta">{turn.resolution} · {turn.aspectRatio}</span>
-                                  <div className="image-actions">
-                                    <button
-                                      type="button"
-                                      className="img-action-btn"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        openImageInNewTab(output.imageData!);
-                                      }}
-                                      title="Open in new tab"
-                                    >
-                                      ↗ Open
-                                    </button>
-                                    <button
-                                      type="button"
-                                      className="img-action-btn"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        downloadImage(
-                                          output.imageData!,
-                                          `gemini-${turn.resolution}-${turn.aspectRatio.replace(':', 'x')}-${Date.now()}.webp`
-                                        );
-                                      }}
-                                    >
-                                      ↓ Download
-                                    </button>
-                                    <button
-                                      type="button"
-                                      className="img-action-btn regen"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        handleRegenerate(idx);
-                                      }}
-                                      disabled={current.isGenerating}
-                                      title="Regenerate this image"
-                                    >
-                                      ↻ Regen
-                                    </button>
-                                    {generationMode === 'flowith' && output.flowithUrl && (
-                                      <button
-                                        type="button"
-                                        className={`img-action-btn reply ${flowithReplyContext?.imageUrl === output.flowithUrl ? 'active' : ''}`}
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          handleSelectFlowithReply(output, prompt || '', idx);
-                                        }}
-                                        disabled={current.isGenerating}
-                                        title="Reply to this image"
-                                      >
-                                        ↩ Reply
-                                      </button>
-                                    )}
-                                    {generationMode === 'local' && output.imageData && (
-                                      <button
-                                        type="button"
-                                        className={`img-action-btn reply ${localReplyContext?.imageDataUrl === output.imageData ? 'active' : ''}`}
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          handleSelectLocalReply(output, idx);
-                                        }}
-                                        disabled={current.isGenerating}
-                                        title="Reply to this image"
-                                      >
-                                        ↩ Reply
-                                      </button>
-                                    )}
-                                  </div>
-                                </figcaption>
-                              </figure>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
               ))}
-
-              {current.isGenerating && (
-                <div className="generating-indicator">
-                  {bulkResults.length > 0 ? (
-                    <div className="bulk-progress">
-                      <div className="bulk-progress-header">
-                        <span className="pulse"></span>
-                        GENERATING {bulkResults.filter(r => r.status === 'done').length}/{bulkResults.length}
-                      </div>
-                      <div className="bulk-progress-grid">
-                        {bulkResults.map((result, idx) => (
-                          <div 
-                            key={result.id} 
-                            className={`bulk-slot ${result.status} ${result.errorType ? `error-${result.errorType}` : ''}`}
-                            title={result.error || undefined}
-                          >
-                            {result.status === 'pending' && <span className="slot-icon">◯</span>}
-                            {result.status === 'generating' && <span className="slot-icon spinning">◐</span>}
-                            {result.status === 'done' && result.outputs.find(o => o.type === 'image') ? (
-                              <img 
-                                src={result.outputs.find(o => o.type === 'image')?.imageData} 
-                                alt={`Result ${idx + 1}`} 
-                              />
-                            ) : result.status === 'done' ? (
-                              <span className="slot-icon">✓</span>
-                            ) : null}
-                            {result.status === 'error' && (
-                              <div className="slot-error">
-                                <span className="slot-icon error">
-                                  {result.errorType === 'content_policy' ? '🚫' : '✕'}
-                                </span>
-                                <span className="slot-error-type">
-                                  {result.errorType === 'content_policy' ? 'Blocked' : 'Failed'}
-                                </span>
-                              </div>
-                            )}
-                            <span className="slot-label">#{idx + 1}</span>
-                          </div>
-                        ))}
-                      </div>
-                      <div className="bulk-timer">{(elapsedTime / 1000).toFixed(1)}s</div>
-                    </div>
-                  ) : (
-                    <div className="streaming-badge large">
-                      <span className="pulse"></span>
-                      {generationMode === 'flowith' && flowithProgress !== 'idle' ? (
-                        <>
-                          {flowithProgress === 'uploading' && 'UPLOADING IMAGES...'}
-                          {flowithProgress === 'connected' && 'CONNECTED...'}
-                          {flowithProgress === 'processing' && 'GENERATING...'}
-                        </>
-                      ) : (
-                        'GENERATING...'
-                      )} {(elapsedTime / 1000).toFixed(1)}s
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {current.error && (
-                <div className={`error-banner ${current.errorType ? `error-${current.errorType}` : ''}`}>
-                  <span className="error-icon">
-                    {current.errorType === 'content_policy' ? '🚫' : '!'}
-                  </span>
-                  <div className="error-content">
-                    <span className="error-message">{current.error}</span>
-                    {generationMode === 'flowith' && lastPrompt && (
-                      <button
-                        type="button"
-                        className="error-retry-btn"
-                        onClick={() => {
-                          setCurrent(prev => ({ ...prev, error: undefined, errorType: undefined }));
-                          if (bulkCount > 1) {
-                            generateBulkWithFlowith(lastPrompt, lastImages);
-                          } else {
-                            generateWithFlowith(lastPrompt, lastImages);
-                          }
-                        }}
-                      >
-                        ↻ Retry
-                      </button>
-                    )}
-                  </div>
-                </div>
-              )}
+              <span className="image-count">{uploadedImages.length}/14</span>
             </div>
+          )}
 
-            <form onSubmit={handleSubmit} className="prompt-form sticky">
-              {lastModelTurn && lastModelTurn.outputs.some(o => o.type === 'image') && (
-                <div className="edit-hint">
-                  Continue editing or paste/upload new reference images
-                </div>
-              )}
-
-              {flowithReplyContext && generationMode === 'flowith' && (
-                <div className="flowith-reply-context">
-                  <div className="reply-context-header">
-                    <span className="reply-label">↩ Replying to:</span>
-                    <button 
-                      type="button" 
-                      className="clear-reply-btn"
-                      onClick={handleClearFlowithReply}
-                      disabled={current.isGenerating}
-                    >
-                      ×
-                    </button>
-                  </div>
-                  <div className="reply-preview">
-                    <img src={flowithReplyContext.imageDataUrl} alt="Reply context" />
-                    <span className="reply-info">{flowithReplyContext.history.length} messages in context</span>
-                  </div>
-                </div>
-              )}
-
-              {localReplyContext && generationMode === 'local' && (
-                <div className="flowith-reply-context">
-                  <div className="reply-context-header">
-                    <span className="reply-label">↩ Replying to:</span>
-                    <button 
-                      type="button" 
-                      className="clear-reply-btn"
-                      onClick={handleClearLocalReply}
-                      disabled={current.isGenerating}
-                    >
-                      ×
-                    </button>
-                  </div>
-                  <div className="reply-preview">
-                    <img src={localReplyContext.imageDataUrl} alt="Reply context" />
-                    <span className="reply-info">{localReplyContext.history.length} turns in context</span>
-                  </div>
-                </div>
-              )}
-
-              {uploadedImages.length > 0 && (
-                <div className="uploaded-images-row">
-                  {uploadedImages.map(img => (
-                    <div key={img.id} className="uploaded-image-preview">
-                      <img src={img.dataUrl} alt={img.name} />
-                      <button
-                        type="button"
-                        className="remove-image-btn"
-                        onClick={() => removeImage(img.id)}
-                        disabled={current.isGenerating}
-                      >
-                        ×
-                      </button>
-                    </div>
-                  ))}
-                  <span className="image-count">{uploadedImages.length}/14</span>
-                </div>
-              )}
-
-              <div className="input-wrapper">
-                <div className="input-row">
-                  <button
-                    type="button"
-                    className="upload-btn"
-                    onClick={() => fileInputRef.current?.click()}
-                    disabled={uploadedImages.length >= 14}
-                    title="Upload reference images (up to 14)"
-                  >
-                    <span className="upload-icon">+</span>
-                  </button>
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="image/*"
-                    multiple
-                    onChange={handleFileSelect}
-                    style={{ display: 'none' }}
-                  />
-                  <textarea
-                    ref={textareaRef}
-                    value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                    onPaste={handlePaste}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && !e.shiftKey) {
-                        e.preventDefault();
-                        handleSubmit(e);
-                      }
-                    }}
-                    placeholder={uploadedImages.length > 0 
-                      ? "Describe what to do with these images..." 
-                      : conversation.length > 0 
-                        ? "Describe your edit... (Ctrl+V to paste)" 
-                        : "Describe your vision or paste images (Ctrl+V)..."}
-                    className="prompt-input"
-                    rows={2}
-                  />
-                  <button type="submit" disabled={!canSubmit} className="btn btn-generate">
-                    <span className="btn-icon">→</span>
-                    {current.isGenerating ? '...' : conversation.length > 0 ? 'EDIT' : 'GO'}
-                  </button>
-                </div>
-              </div>
-              {duration && !current.isGenerating && (
-                <div className="timing-info">Generated in {duration}s</div>
-              )}
-            </form>
-          </>
-        )}
-
-        {/* Image Lightbox Modal */}
-        {lightbox && (
-          <div className="lightbox-overlay" onClick={() => setLightbox(null)}>
-            <div className="lightbox-content" onClick={(e) => e.stopPropagation()}>
-              <button className="lightbox-close" onClick={() => setLightbox(null)}>×</button>
-              <div className="lightbox-image-wrap">
-                <img src={lightbox.imageData} alt="Full size" />
-              </div>
-              <div className="lightbox-info">
-                {lightbox.prompt && (
-                  <div className="lightbox-prompt">
-                    <span className="lightbox-label">PROMPT</span>
-                    <p>{lightbox.prompt}</p>
-                  </div>
-                )}
-                <div className="lightbox-stats">
-                  <div className="stat">
-                    <span className="stat-label">Resolution</span>
-                    <span className="stat-value">{lightbox.resolution}</span>
-                  </div>
-                  <div className="stat">
-                    <span className="stat-label">Aspect Ratio</span>
-                    <span className="stat-value">{lightbox.aspectRatio}</span>
-                  </div>
-                  {lightbox.generationTime && (
-                    <div className="stat">
-                      <span className="stat-label">Gen Time</span>
-                      <span className="stat-value">{(lightbox.generationTime / 1000).toFixed(1)}s</span>
-                    </div>
-                  )}
-                  <div className="stat">
-                    <span className="stat-label">Created</span>
-                    <span className="stat-value">{lightbox.timestamp.toLocaleString()}</span>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => downloadImage(
-                    lightbox.imageData,
-                    `gemini-${lightbox.resolution}-${lightbox.aspectRatio.replace(':', 'x')}-${Date.now()}.webp`
-                  )}
-                  className="lightbox-download"
-                >
-                  ↓ Download Full Size
-                </button>
-              </div>
+          <div className="input-wrapper">
+            <div className="input-row">
+              <button
+                type="button"
+                className="upload-btn"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={current.isGenerating || uploadedImages.length >= 14}
+                title="Upload reference images (up to 14)"
+              >
+                <span className="upload-icon">+</span>
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                multiple
+                onChange={handleFileSelect}
+                style={{ display: 'none' }}
+              />
+              <textarea
+                ref={textareaRef}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onPaste={handlePaste}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    handleSubmit(e);
+                  }
+                }}
+                placeholder={uploadedImages.length > 0 
+                  ? "Describe what to do with these images..." 
+                  : conversation.length > 0 
+                    ? "Describe your edit... (Ctrl+V to paste)" 
+                    : "Describe your vision or paste images (Ctrl+V)..."}
+                disabled={current.isGenerating}
+                className="prompt-input"
+                rows={2}
+              />
+              <button type="submit" disabled={!canSubmit} className="btn btn-generate">
+                <span className="btn-icon">→</span>
+                {current.isGenerating ? '...' : conversation.length > 0 ? 'EDIT' : 'GO'}
+              </button>
             </div>
           </div>
-        )}
+          {duration && !current.isGenerating && (
+            <div className="timing-info">Generated in {duration}s</div>
+          )}
+        </form>
       </main>
+
+      {/* Image Lightbox Modal */}
+      {lightbox && (
+        <div className="lightbox-overlay" onClick={() => setLightbox(null)}>
+          <div className="lightbox-content" onClick={(e) => e.stopPropagation()}>
+            <button className="lightbox-close" onClick={() => setLightbox(null)}>×</button>
+            <div className="lightbox-image-wrap">
+              <img src={lightbox.imageData} alt="Full size" />
+            </div>
+            <div className="lightbox-info">
+              {lightbox.prompt && (
+                <div className="lightbox-prompt">
+                  <span className="lightbox-label">PROMPT</span>
+                  <p>{lightbox.prompt}</p>
+                </div>
+              )}
+              <div className="lightbox-stats">
+                <div className="stat">
+                  <span className="stat-label">Resolution</span>
+                  <span className="stat-value">{lightbox.resolution}</span>
+                </div>
+                <div className="stat">
+                  <span className="stat-label">Aspect Ratio</span>
+                  <span className="stat-value">{lightbox.aspectRatio}</span>
+                </div>
+                {lightbox.generationTime && (
+                  <div className="stat">
+                    <span className="stat-label">Gen Time</span>
+                    <span className="stat-value">{(lightbox.generationTime / 1000).toFixed(1)}s</span>
+                  </div>
+                )}
+                <div className="stat">
+                  <span className="stat-label">Created</span>
+                  <span className="stat-value">{lightbox.timestamp.toLocaleString()}</span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => downloadImage(
+                  lightbox.imageData,
+                  `gemini-${lightbox.resolution}-${lightbox.aspectRatio.replace(':', 'x')}-${Date.now()}.webp`
+                )}
+                className="lightbox-download"
+              >
+                ↓ Download Full Size
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
