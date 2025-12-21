@@ -2166,7 +2166,7 @@ export function Chat() {
             <div className="config-section">
               <label className="config-label">ASPECT RATIO</label>
               <div className="ratio-grid">
-                {ASPECT_RATIOS.slice(0, 6).map(ratio => (
+                {ASPECT_RATIOS.map(ratio => (
                   <button
                     key={ratio.value}
                     type="button"
