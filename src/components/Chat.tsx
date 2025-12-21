@@ -2364,7 +2364,7 @@ export function Chat() {
         )}
       </aside>
 
-      <div className="sidebar-spacer"></div>
+      <div className="sidebar-spacer" />
 
       <main 
         className={`workspace ${isDragging ? 'drag-active' : ''}`}

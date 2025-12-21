@@ -127,6 +127,10 @@ body {
   flex-shrink: 0;
 }
 
+.sidebar-overlay {
+  display: none;
+}
+
 .brand {
   display: flex;
   align-items: center;
