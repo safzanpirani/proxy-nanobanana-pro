@@ -1821,6 +1821,13 @@ body {
     width: 85vw;
     max-width: 320px;
     box-shadow: 4px 0 24px rgba(0, 0, 0, 0.5);
+    position: fixed;
+    height: 100vh;
+    z-index: 1002;
+    background: var(--bg-surface);
+    top: 0;
+    left: 0;
+    border-bottom: none;
   }
   
   .sidebar.open {
@@ -1865,32 +1872,35 @@ body {
   }
   
   .input-row {
-    flex-wrap: wrap;
+    display: flex;
+    flex-wrap: nowrap;
     gap: 8px;
+    align-items: stretch;
   }
   
   .input-row .prompt-input {
-    width: 100%;
-    order: 1;
+    flex: 1;
+    min-width: 0;
     font-size: 16px;
-    padding: 14px 16px;
+    padding: 12px 14px;
   }
   
   .upload-btn {
     width: 44px;
     height: 44px;
-    order: 2;
+    flex-shrink: 0;
   }
   
   .input-row .btn-generate {
-    flex: 1;
-    order: 3;
+    width: auto;
+    flex-shrink: 0;
     height: 44px;
+    padding: 0 16px;
   }
   
   .uploaded-images-row {
-    order: 0;
     width: 100%;
+    margin-bottom: 8px;
   }
   
   .empty-state {

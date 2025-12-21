@@ -1024,9 +1024,9 @@ export function Chat() {
         }
       }
 
-      setConversationHistory(prev => [
-        ...prev,
-        { role: 'user', parts: userParts },
+      setConversationHistory([
+        ...conversationHistory, 
+        { role: 'user', parts: userParts }, 
         { role: 'model', parts: modelParts }
       ]);
     }
@@ -2363,6 +2363,8 @@ export function Chat() {
           </div>
         )}
       </aside>
+
+      <div className="sidebar-spacer"></div>
 
       <main 
         className={`workspace ${isDragging ? 'drag-active' : ''}`}
