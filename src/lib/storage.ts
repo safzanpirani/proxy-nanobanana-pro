@@ -93,6 +93,36 @@ export async function saveImage(dataUrl: string): Promise<string> {
   throw new Error('Failed to save image')
 }
 
+export async function saveSignature(signature: string): Promise<string> {
+  try {
+    const res = await fetch('/api/signatures', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ signature })
+    })
+    if (res.ok) {
+      const { id } = await res.json()
+      return id
+    }
+  } catch (e) {
+    console.warn('Failed to save signature:', e)
+  }
+  throw new Error('Failed to save signature')
+}
+
+export async function getSignature(id: string): Promise<string | null> {
+  try {
+    const res = await fetch(`/api/signatures/${id}`)
+    if (res.ok) {
+      const { signature } = await res.json()
+      return signature || null
+    }
+  } catch (e) {
+    console.warn('Failed to load signature:', e)
+  }
+  return null
+}
+
 export function getImageUrl(id: string): string {
   return `/api/images/${id}`
 }

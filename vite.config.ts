@@ -10,11 +10,13 @@ const DATA_DIR = path.resolve(__dirname, 'data')
 const SESSIONS_FILE = path.resolve(DATA_DIR, 'sessions.json')
 const SESSIONS_DIR = path.resolve(DATA_DIR, 'sessions')
 const IMAGES_DIR = path.resolve(DATA_DIR, 'images')
+const SIGNATURES_DIR = path.resolve(DATA_DIR, 'signatures')
 
 function ensureDataDirs() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true })
   if (!fs.existsSync(SESSIONS_DIR)) fs.mkdirSync(SESSIONS_DIR, { recursive: true })
   if (!fs.existsSync(IMAGES_DIR)) fs.mkdirSync(IMAGES_DIR, { recursive: true })
+  if (!fs.existsSync(SIGNATURES_DIR)) fs.mkdirSync(SIGNATURES_DIR, { recursive: true })
 }
 
 function storageApiPlugin() {
@@ -106,6 +108,60 @@ function storageApiPlugin() {
         }
       })
 
+      server.middlewares.use('/api/signatures', (req: IncomingMessage, res: ServerResponse, next: () => void) => {
+        const urlPath = req.url || ''
+        const signatureId = urlPath.replace(/^\//, '')
+
+        if (req.method === 'POST' && !signatureId) {
+          let body = ''
+          req.on('data', (chunk: Buffer) => body += chunk.toString())
+          req.on('end', () => {
+            try {
+              const { signature } = JSON.parse(body)
+              if (!signature) {
+                res.statusCode = 400
+                res.end('{"error":"No signature provided"}')
+                return
+              }
+
+              const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+              const signatureFile = path.join(SIGNATURES_DIR, `${id}.bin`)
+              const buffer = Buffer.from(signature, 'base64')
+
+              fs.writeFileSync(signatureFile, buffer)
+              res.setHeader('Content-Type', 'application/json')
+              res.end(JSON.stringify({ id, url: `/api/signatures/${id}` }))
+            } catch (e) {
+              res.statusCode = 500
+              res.end(JSON.stringify({ error: (e as Error).message }))
+            }
+          })
+          return
+        }
+
+        if (req.method === 'GET' && signatureId) {
+          const signatureFile = path.join(SIGNATURES_DIR, `${signatureId}.bin`)
+
+          try {
+            if (fs.existsSync(signatureFile)) {
+              const data = fs.readFileSync(signatureFile)
+              res.setHeader('Content-Type', 'application/json')
+              res.setHeader('Cache-Control', 'public, max-age=31536000')
+              res.end(JSON.stringify({ signature: data.toString('base64') }))
+            } else {
+              res.statusCode = 404
+              res.end('{"error":"Not found"}')
+            }
+          } catch (e) {
+            res.statusCode = 500
+            res.end(JSON.stringify({ error: (e as Error).message }))
+          }
+          return
+        }
+
+        next()
+      })
+
       // Handle /api/images - MUST come before /api/images/ to properly handle POST
       server.middlewares.use('/api/images', (req: IncomingMessage, res: ServerResponse, next: () => void) => {
         // Extract the path after /api/images
@@ -193,6 +249,7 @@ function storageApiPlugin() {
 export default defineConfig({
   plugins: [react(), storageApiPlugin()],
   server: {
-    host: true
+    host: true,
+    port: 8484
   }
 })

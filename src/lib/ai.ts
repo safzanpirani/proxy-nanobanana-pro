@@ -5,7 +5,7 @@ export const MODEL_ID = 'gemini-3-pro-image-preview';
 export const client = new GoogleGenAI({
   apiKey: 'dummy-key',
   httpOptions: {
-    baseUrl: 'http://localhost:8317',
+    baseUrl: 'https://llm.safzan.dev',
   },
 });
 
@@ -46,6 +46,7 @@ export interface OutputPart {
   imageData?: string;
   mimeType?: string;
   signature?: string;
+  signatureStorageId?: string | null;
   storageId?: string | null;
   flowithUrl?: string;
 }

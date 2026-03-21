@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, type FormEvent, type ChangeEvent, type Cli
 import { client, MODEL_ID, ASPECT_RATIOS, RESOLUTIONS, createImagePart, Modality, type AspectRatio, type Resolution, type ThoughtPart, type OutputPart, type Content, type UploadedImage, type Part } from '../lib/ai';
 import * as storage from '../lib/storage';
 import { FlowithConfig, loadFlowithConfig, saveFlowithConfig } from './FlowithConfig';
+import { PromptChat } from './PromptChat';
 import {
   type FlowithConfig as FlowithConfigType,
   type FlowithAspectRatio,
@@ -187,8 +188,187 @@ async function storeImageToDB(imageData: string): Promise<string | null> {
   }
 }
 
+async function storeSignatureToDB(signature: string): Promise<string | null> {
+  try {
+    return await storage.saveSignature(signature);
+  } catch (e) {
+    console.error('Failed to store signature:', e);
+    return null;
+  }
+}
+
 function getImageUrl(id: string): string {
   return `/api/images/${id}`;
+}
+
+async function hydrateUploadedImageFromStorage(img: UploadedImage): Promise<UploadedImage> {
+  if (img.storageId) {
+    return { ...img, dataUrl: getImageUrl(img.storageId) };
+  }
+  return img;
+}
+
+async function hydrateThoughtFromStorage(thought: ThoughtPart): Promise<ThoughtPart> {
+  if (thought.type === 'thought-image' && thought.storageId) {
+    return { ...thought, imageData: getImageUrl(thought.storageId) };
+  }
+  return thought;
+}
+
+async function hydrateOutputFromStorage(output: OutputPart): Promise<OutputPart> {
+  let hydrated = output;
+
+  if (hydrated.type === 'image' && hydrated.storageId) {
+    hydrated = { ...hydrated, imageData: getImageUrl(hydrated.storageId) };
+  }
+
+  if (hydrated.signatureStorageId && !hydrated.signature) {
+    const signature = await storage.getSignature(hydrated.signatureStorageId);
+    if (signature) {
+      hydrated = { ...hydrated, signature };
+    }
+  }
+
+  return hydrated;
+}
+
+async function hydrateTurnVersionFromStorage(version: TurnVersion): Promise<TurnVersion> {
+  return {
+    ...version,
+    timestamp: new Date(version.timestamp),
+    userImages: version.userImages
+      ? await Promise.all(version.userImages.map(hydrateUploadedImageFromStorage))
+      : undefined,
+    modelThoughts: await Promise.all(version.modelThoughts.map(hydrateThoughtFromStorage)),
+    modelOutputs: await Promise.all(version.modelOutputs.map(hydrateOutputFromStorage)),
+  };
+}
+
+async function hydrateConversationTurnFromStorage(turn: ConversationTurn): Promise<ConversationTurn> {
+  return {
+    ...turn,
+    timestamp: new Date(turn.timestamp),
+    images: turn.images
+      ? await Promise.all(turn.images.map(hydrateUploadedImageFromStorage))
+      : undefined,
+    outputs: await Promise.all(turn.outputs.map(hydrateOutputFromStorage)),
+    thoughts: await Promise.all(turn.thoughts.map(hydrateThoughtFromStorage)),
+    versions: turn.versions
+      ? await Promise.all(turn.versions.map(hydrateTurnVersionFromStorage))
+      : undefined,
+  };
+}
+
+async function prepareUploadedImageForStorage(img: UploadedImage): Promise<UploadedImage> {
+  if (img.dataUrl && !img.storageId) {
+    const storageId = await storeImageToDB(img.dataUrl);
+    if (storageId) {
+      return { ...img, storageId };
+    }
+  }
+  return img;
+}
+
+async function prepareThoughtForStorage(thought: ThoughtPart): Promise<ThoughtPart> {
+  if (thought.type === 'thought-image' && thought.imageData && !thought.storageId) {
+    const storageId = await storeImageToDB(thought.imageData);
+    if (storageId) {
+      return { ...thought, storageId };
+    }
+  }
+  return thought;
+}
+
+async function prepareOutputForStorage(output: OutputPart): Promise<OutputPart> {
+  let prepared = output;
+
+  if (prepared.type === 'image' && prepared.imageData && !prepared.storageId) {
+    const storageId = await storeImageToDB(prepared.imageData);
+    if (storageId) {
+      prepared = { ...prepared, storageId };
+    }
+  }
+
+  if (prepared.signature && !prepared.signatureStorageId) {
+    const signatureStorageId = await storeSignatureToDB(prepared.signature);
+    if (signatureStorageId) {
+      prepared = { ...prepared, signatureStorageId };
+    }
+  }
+
+  return prepared;
+}
+
+async function prepareTurnVersionForStorage(version: TurnVersion): Promise<TurnVersion> {
+  return {
+    ...version,
+    userImages: version.userImages
+      ? await Promise.all(version.userImages.map(prepareUploadedImageForStorage))
+      : undefined,
+    modelThoughts: await Promise.all(version.modelThoughts.map(prepareThoughtForStorage)),
+    modelOutputs: await Promise.all(version.modelOutputs.map(prepareOutputForStorage)),
+  };
+}
+
+async function prepareConversationTurnForStorage(turn: ConversationTurn): Promise<ConversationTurn> {
+  return {
+    ...turn,
+    images: turn.images
+      ? await Promise.all(turn.images.map(prepareUploadedImageForStorage))
+      : undefined,
+    outputs: await Promise.all(turn.outputs.map(prepareOutputForStorage)),
+    thoughts: await Promise.all(turn.thoughts.map(prepareThoughtForStorage)),
+    versions: turn.versions
+      ? await Promise.all(turn.versions.map(prepareTurnVersionForStorage))
+      : undefined,
+  };
+}
+
+function stripUploadedImageForStorage(img: UploadedImage): UploadedImage {
+  if (img.storageId && img.dataUrl) {
+    return { ...img, dataUrl: '' };
+  }
+  return img;
+}
+
+function stripThoughtForStorage(thought: ThoughtPart): ThoughtPart {
+  if (thought.type === 'thought-image' && thought.storageId && thought.imageData) {
+    return { ...thought, imageData: '' };
+  }
+  return thought;
+}
+
+function stripOutputForStorage(output: OutputPart): OutputPart {
+  let stripped = output;
+
+  if (stripped.type === 'image' && stripped.storageId && stripped.imageData) {
+    stripped = { ...stripped, imageData: '' };
+  }
+
+  if (stripped.signatureStorageId && stripped.signature) {
+    stripped = { ...stripped, signature: '' };
+  }
+
+  return stripped;
+}
+
+function stripTurnVersionForStorage(version: TurnVersion): TurnVersion {
+  return {
+    ...version,
+    userImages: version.userImages?.map(stripUploadedImageForStorage),
+    modelThoughts: version.modelThoughts.map(stripThoughtForStorage),
+    modelOutputs: version.modelOutputs.map(stripOutputForStorage),
+  };
+}
+
+function stripConversationTurnForStorage(turn: ConversationTurn): ConversationTurn {
+  return {
+    ...turn,
+    images: turn.images?.map(stripUploadedImageForStorage),
+    outputs: turn.outputs.map(stripOutputForStorage),
+    thoughts: turn.thoughts.map(stripThoughtForStorage),
+    versions: turn.versions?.map(stripTurnVersionForStorage),
+  };
 }
 
 async function loadSessionFromDB(id: string): Promise<ConversationTurn[] | null> {
@@ -196,30 +376,7 @@ async function loadSessionFromDB(id: string): Promise<ConversationTurn[] | null>
     const data = await storage.getSession(id) as ConversationTurn[] | null;
     if (!data) return null;
 
-    const turns = data.map(turn => ({
-      ...turn,
-      timestamp: new Date(turn.timestamp),
-      images: turn.images?.map(img => {
-        if (img.storageId) {
-          return { ...img, dataUrl: getImageUrl(img.storageId) };
-        }
-        return img;
-      }),
-      outputs: turn.outputs.map(o => {
-        if (o.type === 'image' && o.storageId) {
-          return { ...o, imageData: getImageUrl(o.storageId) };
-        }
-        return o;
-      }),
-      thoughts: turn.thoughts.map(t => {
-        if (t.type === 'thought-image' && t.storageId) {
-          return { ...t, imageData: getImageUrl(t.storageId) };
-        }
-        return t;
-      }),
-    }));
-
-    return turns;
+    return await Promise.all(data.map(hydrateConversationTurnFromStorage));
   } catch {
     return null;
   }
@@ -227,37 +384,8 @@ async function loadSessionFromDB(id: string): Promise<ConversationTurn[] | null>
 
 async function saveSessionToDB(id: string, conversation: ConversationTurn[]): Promise<ConversationTurn[]> {
   try {
-    const forStorage = await Promise.all(conversation.map(async turn => ({
-      ...turn,
-      images: turn.images ? await Promise.all(turn.images.map(async img => {
-        if (img.dataUrl && !img.storageId) {
-          const storageId = await storeImageToDB(img.dataUrl);
-          return { ...img, storageId: storageId || img.storageId };
-        }
-        return img;
-      })) : undefined,
-      outputs: await Promise.all(turn.outputs.map(async o => {
-        if (o.type === 'image' && o.imageData && !o.storageId) {
-          const storageId = await storeImageToDB(o.imageData);
-          return { ...o, storageId: storageId || o.storageId };
-        }
-        return o;
-      })),
-      thoughts: await Promise.all(turn.thoughts.map(async t => {
-        if (t.type === 'thought-image' && t.imageData && !t.storageId) {
-          const storageId = await storeImageToDB(t.imageData);
-          return { ...t, storageId: storageId || t.storageId };
-        }
-        return t;
-      })),
-    })));
-
-    const toSave = forStorage.map(turn => ({
-      ...turn,
-      images: turn.images?.map(img => ({ ...img, dataUrl: '' })),
-      outputs: turn.outputs.map(o => o.type === 'image' ? { ...o, imageData: '' } : o),
-      thoughts: turn.thoughts.map(t => t.type === 'thought-image' ? { ...t, imageData: '' } : t),
-    }));
+    const forStorage = await Promise.all(conversation.map(prepareConversationTurnForStorage));
+    const toSave = forStorage.map(stripConversationTurnForStorage);
 
     await storage.saveSession(id, toSave);
     return forStorage;
@@ -273,9 +401,10 @@ export function Chat() {
   const [aspectRatio, setAspectRatio] = useState<AspectRatio>('1:1');
   const [resolution, setResolution] = useState<Resolution>('1K');
   const [useGrounding, setUseGrounding] = useState(false);
-  const [bulkCount, setBulkCount] = useState<1 | 2 | 4 | 8>(1);
+  const [bulkCount, setBulkCount] = useState<1 | 2 | 3 | 4>(1);
   const [conversation, setConversation] = useState<ConversationTurn[]>([]);
   const [conversationHistory, setConversationHistory] = useState<Content[]>([]);
+  const [viewMode, setViewMode] = useState<'image' | 'chat'>('image');
   const [current, setCurrent] = useState<GenerationState>({
     thoughts: [],
     outputs: [],
@@ -309,6 +438,10 @@ export function Chat() {
   
   // Warning for legacy sessions without signature support
   const [legacySessionWarning, setLegacySessionWarning] = useState(false);
+  
+  // Session rename state
+  const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
+  const [renameInput, setRenameInput] = useState('');
   
   // Live generation timer
   const [elapsedTime, setElapsedTime] = useState(0);
@@ -384,6 +517,23 @@ export function Chat() {
 
   useEffect(() => {
     storage.getAllSessionsMeta().then(setSessions);
+  }, []);
+
+  // Load session from URL hash if present
+  useEffect(() => {
+    const hash = window.location.hash;
+    if (hash.startsWith('#session=')) {
+      const sessionId = hash.replace('#session=', '');
+      if (sessionId) {
+        // Wait for sessions to load, then load the session
+        storage.getAllSessionsMeta().then(async (metas) => {
+          const session = metas.find(s => s.id === sessionId);
+          if (session) {
+            handleLoadSession(session);
+          }
+        });
+      }
+    }
   }, []);
 
   // Live timer effect
@@ -462,6 +612,10 @@ export function Chat() {
   // Keyboard shortcuts
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
+      // Don't capture input if user is typing in another input/textarea (except our main one)
+      const target = e.target as HTMLElement;
+      const isInInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA';
+      
       // Ctrl+Enter - Generate
       if (e.ctrlKey && e.key === 'Enter' && !current.isGenerating) {
         e.preventDefault();
@@ -488,12 +642,12 @@ export function Chat() {
         handleNewSession();
       }
       
-      // Alt+1/2/3/4 - Quick bulk count selection (1x, 2x, 4x, 8x)
+      // Alt+1/2/3/4 - Quick bulk count selection (use e.code for Mac compatibility)
       if (e.altKey && !current.isGenerating) {
-        if (e.key === '1') { e.preventDefault(); setBulkCount(1); }
-        if (e.key === '2') { e.preventDefault(); setBulkCount(2); }
-        if (e.key === '3') { e.preventDefault(); setBulkCount(4); }
-        if (e.key === '4') { e.preventDefault(); setBulkCount(8); }
+        if (e.code === 'Digit1') { e.preventDefault(); setBulkCount(1); }
+        if (e.code === 'Digit2') { e.preventDefault(); setBulkCount(2); }
+        if (e.code === 'Digit3') { e.preventDefault(); setBulkCount(3); }
+        if (e.code === 'Digit4') { e.preventDefault(); setBulkCount(4); }
       }
       
       // Arrow keys for lightbox navigation
@@ -513,11 +667,55 @@ export function Chat() {
           }
         }
       }
+      
+      // Global typing - forward printable characters to the textarea when not in an input
+      if (!isInInput && !e.ctrlKey && !e.metaKey && !e.altKey && e.key.length === 1 && viewMode === 'image') {
+        textareaRef.current?.focus();
+        // The character will be typed naturally after focus
+      }
     }
     
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [current.isGenerating, lightbox, flowithReplyContext, localReplyContext, conversation]);
+  }, [current.isGenerating, lightbox, flowithReplyContext, localReplyContext, conversation, viewMode]);
+
+  // Global paste handler - allows pasting images when not focused on textarea
+  useEffect(() => {
+    async function handleGlobalPaste(e: globalThis.ClipboardEvent) {
+      // Skip if we're in an input element (the textarea handler will handle it)
+      const target = e.target as HTMLElement;
+      const isInInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA';
+      if (isInInput) return;
+      
+      // Only handle in image mode
+      if (viewMode !== 'image') return;
+      
+      const items = e.clipboardData?.items;
+      if (!items) return;
+
+      const newImages: UploadedImage[] = [];
+
+      for (const item of Array.from(items)) {
+        if (item.type.startsWith('image/')) {
+          e.preventDefault();
+          const file = item.getAsFile();
+          if (file && uploadedImages.length + newImages.length < 14) {
+            const img = await addImageFromFile(file);
+            if (img) newImages.push(img);
+          }
+        }
+      }
+
+      if (newImages.length > 0) {
+        setUploadedImages(prev => [...prev, ...newImages].slice(0, 14));
+        // Focus the textarea so user can type a prompt
+        textareaRef.current?.focus();
+      }
+    }
+    
+    window.addEventListener('paste', handleGlobalPaste);
+    return () => window.removeEventListener('paste', handleGlobalPaste);
+  }, [viewMode, uploadedImages.length]);
 
   async function addImageFromFile(file: File): Promise<UploadedImage | null> {
     if (!file.type.startsWith('image/')) return null;
@@ -1484,7 +1682,15 @@ export function Chat() {
     }
   }
 
-  function handleNewSession() {
+  function handleNewSession(openInNewTab = false) {
+    if (openInNewTab) {
+      // Open fresh session in new tab
+      const url = new URL(window.location.href);
+      url.hash = '';
+      window.open(url.toString(), '_blank');
+      return;
+    }
+    
     setConversation([]);
     setConversationHistory([]);
     setUploadedImages([]);
@@ -1668,7 +1874,15 @@ export function Chat() {
     textareaRef.current?.focus();
   }
 
-  async function handleLoadSession(session: SavedSessionMeta) {
+  async function handleLoadSession(session: SavedSessionMeta, openInNewTab = false) {
+    if (openInNewTab) {
+      // Open in new tab by setting URL hash
+      const url = new URL(window.location.href);
+      url.hash = `session=${session.id}`;
+      window.open(url.toString(), '_blank');
+      return;
+    }
+    
     const data = await loadSessionFromDB(session.id);
     if (data) {
       setConversation(data);
@@ -1706,7 +1920,8 @@ export function Chat() {
               }
               parts.push(textPart as Part);
             } else if (output.type === 'image' && output.imageData) {
-              let base64 = '';
+              let base64: string | undefined;
+              
               if (output.imageData.startsWith('data:')) {
                 base64 = output.imageData.split(',')[1];
               } else if (output.storageId) {
@@ -1724,6 +1939,7 @@ export function Chat() {
                   console.error('Failed to load image for history:', e);
                 }
               }
+              
               if (base64) {
                 // MUST include thoughtSignature for model-generated images
                 const imagePart: Record<string, unknown> = {
@@ -1766,6 +1982,42 @@ export function Chat() {
     if (currentSessionId === id) {
       handleNewSession();
     }
+  }
+
+  function handleStartRename(session: SavedSessionMeta, e: React.MouseEvent) {
+    e.stopPropagation();
+    setRenamingSessionId(session.id);
+    setRenameInput(session.name);
+  }
+
+  function handleCancelRename() {
+    setRenamingSessionId(null);
+    setRenameInput('');
+  }
+
+  async function handleSaveRename(sessionId: string) {
+    const newName = renameInput.trim();
+    if (!newName) {
+      handleCancelRename();
+      return;
+    }
+    
+    const session = sessions.find(s => s.id === sessionId);
+    if (!session) {
+      handleCancelRename();
+      return;
+    }
+    
+    const updated: SavedSessionMeta = {
+      ...session,
+      name: newName,
+      updatedAt: new Date().toISOString(),
+    };
+    
+    await storage.saveSessionMeta(updated);
+    setSessions(prev => prev.map(s => s.id === sessionId ? updated : s));
+    setRenamingSessionId(null);
+    setRenameInput('');
   }
 
   // ===== BRANCHING HANDLERS =====
@@ -2198,7 +2450,7 @@ export function Chat() {
             <div className="config-section">
               <label className="config-label">BULK GENERATE</label>
               <div className="bulk-btns">
-                {([1, 2, 4, 8] as const).map(count => (
+                {([1, 2, 3, 4] as const).map(count => (
                   <button
                     key={count}
                     type="button"
@@ -2308,9 +2560,10 @@ export function Chat() {
               <div className="session-actions">
                 <button 
                   type="button" 
-                  onClick={handleNewSession} 
+                  onClick={(e) => handleNewSession(e.ctrlKey || e.metaKey)} 
                   className="action-btn"
                   disabled={current.isGenerating}
+                  title="New Session (Ctrl/Cmd+Click to open in new tab)"
                 >
                   + New Session
                 </button>
@@ -2330,10 +2583,14 @@ export function Chat() {
                 {sessions.map(session => (
                   <div 
                     key={session.id} 
-                    className={`session-card ${currentSessionId === session.id ? 'active' : ''}`}
-                    onClick={() => {
-                      handleLoadSession(session);
-                      setSidebarOpen(false);
+                    className={`session-card ${currentSessionId === session.id ? 'active' : ''} ${renamingSessionId === session.id ? 'renaming' : ''}`}
+                    onClick={(e) => {
+                      if (renamingSessionId === session.id) return;
+                      const openInNewTab = e.ctrlKey || e.metaKey;
+                      handleLoadSession(session, openInNewTab);
+                      if (!openInNewTab) {
+                        setSidebarOpen(false);
+                      }
                     }}
                   >
                     {session.thumbnail && (
@@ -2342,20 +2599,77 @@ export function Chat() {
                       </div>
                     )}
                     <div className="session-info">
-                      <div className="session-name">{session.name}</div>
+                      {renamingSessionId === session.id ? (
+                        <input
+                          type="text"
+                          className="session-rename-input"
+                          value={renameInput}
+                          onChange={(e) => setRenameInput(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              handleSaveRename(session.id);
+                            }
+                            if (e.key === 'Escape') {
+                              handleCancelRename();
+                            }
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                          autoFocus
+                        />
+                      ) : (
+                        <div className="session-name">{session.name}</div>
+                      )}
                       <div className="session-date">
                         {session.turnCount} turn{session.turnCount > 1 ? 's' : ''} · {new Date(session.updatedAt).toLocaleDateString()}
                       </div>
                     </div>
-                    <button 
-                      className="delete-session-btn"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleDeleteSession(session.id);
-                      }}
-                    >
-                      ×
-                    </button>
+                    <div className="session-actions-row">
+                      {renamingSessionId === session.id ? (
+                        <>
+                          <button 
+                            className="session-action-btn confirm"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleSaveRename(session.id);
+                            }}
+                            title="Save"
+                          >
+                            ✓
+                          </button>
+                          <button 
+                            className="session-action-btn cancel"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleCancelRename();
+                            }}
+                            title="Cancel"
+                          >
+                            ✕
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <button 
+                            className="session-action-btn rename"
+                            onClick={(e) => handleStartRename(session, e)}
+                            title="Rename"
+                          >
+                            ✎
+                          </button>
+                          <button 
+                            className="session-action-btn delete"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDeleteSession(session.id);
+                            }}
+                            title="Delete"
+                          >
+                            🗑
+                          </button>
+                        </>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -2373,596 +2687,603 @@ export function Chat() {
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
       >
-        {/* Top-right new session button */}
-        <button 
-          type="button"
-          className="new-session-fab"
-          onClick={handleNewSession}
-          title="New Session"
-        >
-          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-            <line x1="10" y1="4" x2="10" y2="16" />
-            <line x1="4" y1="10" x2="16" y2="10" />
-          </svg>
-        </button>
-
-        {/* Drag overlay */}
-        {isDragging && (
-          <div className="drag-overlay">
-            <div className="drag-overlay-content">
-              <span className="drag-icon">📷</span>
-              <span className="drag-text">Drop images here</span>
-              <span className="drag-hint">Up to {14 - uploadedImages.length} more images</span>
-            </div>
-          </div>
-        )}
-        
-        <div className="conversation-area" ref={outputRef}>
-          {conversation.length === 0 && current.phase === 'idle' && (
-            <div className="empty-state">
-              <div className="empty-icon">◈</div>
-              <h2>Gemini 3 Pro Image</h2>
-              <p>Generate and edit images with multi-turn conversation. Drag & drop, paste (Ctrl+V), or upload reference images.</p>
-              <div className="feature-tags">
-                <span className="feature-tag">Drag & Drop</span>
-                <span className="feature-tag">Paste from Clipboard</span>
-                <span className="feature-tag">Session History</span>
-                <span className="feature-tag">4K Output</span>
+        {viewMode === 'chat' ? (
+          <PromptChat 
+            onUsePrompt={(prompt: string) => {
+              setInput(prompt);
+              setViewMode('image');
+              textareaRef.current?.focus();
+            }}
+          />
+        ) : (
+          <>
+            {/* Top-right new session button */}
+            <button 
+              type="button"
+              className="new-session-fab"
+              onClick={(e) => handleNewSession(e.ctrlKey || e.metaKey)}
+              title="New Session (Ctrl/Cmd+Click to open in new tab)"
+            >
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                <line x1="10" y1="4" x2="10" y2="16" />
+                <line x1="4" y1="10" x2="16" y2="10" />
+              </svg>
+            </button>
+            
+            {isDragging && (
+              <div className="drag-overlay">
+                <div className="drag-overlay-content">
+                  <span className="drag-icon">📷</span>
+                  <span className="drag-text">Drop images here</span>
+                  <span className="drag-hint">Up to {14 - uploadedImages.length} more images</span>
+                </div>
               </div>
-            </div>
-          )}
-
-          {/* Legacy session warning */}
-          {legacySessionWarning && (
-            <div className="legacy-warning">
-              <span className="warning-icon">⚠</span>
-              <span>This session was created before signature support. Multi-turn editing may not work. Consider starting a new session.</span>
-              <button 
-                type="button" 
-                className="dismiss-warning"
-                onClick={() => setLegacySessionWarning(false)}
-              >
-                ×
-              </button>
-            </div>
-          )}
-
-          {conversation.map((turn, idx) => (
-            <div key={idx} className={`turn turn-${turn.role}`}>
-              {turn.role === 'user' && (
-                <div className="user-message">
-                  <div className="message-meta">
-                    <span className="role-label">YOU</span>
-                    <span className="turn-config">{turn.resolution} · {turn.aspectRatio}</span>
-                    
-                    {/* Version navigation for branched messages */}
-                    {turn.versions && turn.versions.length > 0 && (
-                      <div className="version-nav">
-                        <button
-                          type="button"
-                          className="version-btn"
-                          onClick={() => handleVersionChange(idx, 'prev')}
-                          disabled={(turn.selectedVersion ?? turn.versions.length) === 0 || current.isGenerating}
-                        >
-                          ‹
-                        </button>
-                        <span className="version-indicator">
-                          {(turn.selectedVersion ?? turn.versions.length) + 1} / {turn.versions.length + 1}
-                        </span>
-                        <button
-                          type="button"
-                          className="version-btn"
-                          onClick={() => handleVersionChange(idx, 'next')}
-                          disabled={(turn.selectedVersion ?? turn.versions.length) === turn.versions.length || current.isGenerating}
-                        >
-                          ›
-                        </button>
-                      </div>
-                    )}
-                    
-                    {/* Edit and Delete buttons */}
-                    <div className="message-actions">
-                      {editingTurnIdx !== idx && (
-                        <>
-                          <button
-                            type="button"
-                            className="msg-action-btn regen"
-                            onClick={() => handleRegenerateFromUserTurn(idx)}
-                            disabled={current.isGenerating}
-                            title="Regenerate with current settings"
-                          >
-                            ↻
-                          </button>
-                          <button
-                            type="button"
-                            className={`msg-action-btn copy ${copiedPromptIdx === idx ? 'copied' : ''}`}
-                            onClick={() => handleCopyPrompt(turn.prompt || '', idx)}
-                            title={copiedPromptIdx === idx ? "Copied!" : "Copy prompt"}
-                          >
-                            {copiedPromptIdx === idx ? '✓' : '⧉'}
-                          </button>
-                          <button
-                            type="button"
-                            className="msg-action-btn edit"
-                            onClick={() => handleStartEdit(idx)}
-                            disabled={current.isGenerating}
-                            title="Edit this message"
-                          >
-                            ✎
-                          </button>
-                          <button
-                            type="button"
-                            className="msg-action-btn delete"
-                            onClick={() => handleDeleteTurn(idx)}
-                            disabled={current.isGenerating}
-                            title="Delete this turn"
-                          >
-                            ✕
-                          </button>
-                        </>
-                      )}
-                    </div>
+            )}
+            
+            <div className="conversation-area" ref={outputRef}>
+              {conversation.length === 0 && current.phase === 'idle' && (
+                <div className="empty-state">
+                  <div className="empty-icon">◈</div>
+                  <h2>Gemini 3 Pro Image</h2>
+                  <p>Generate and edit images with multi-turn conversation. Drag & drop, paste (Ctrl+V), or upload reference images.</p>
+                  <div className="feature-tags">
+                    <span className="feature-tag">Drag & Drop</span>
+                    <span className="feature-tag">Paste from Clipboard</span>
+                    <span className="feature-tag">Session History</span>
+                    <span className="feature-tag">4K Output</span>
                   </div>
-                  
-                  {/* Edit mode UI */}
-                  {editingTurnIdx === idx ? (
-                    <div className="edit-mode">
-                      <textarea
-                        className="edit-textarea"
-                        value={editInput}
-                        onChange={(e) => setEditInput(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-                            e.preventDefault();
-                            if (editInput.trim() || editImages.length > 0) {
-                              handleSaveEdit();
-                            }
-                          }
-                          if (e.key === 'Escape') {
-                            handleCancelEdit();
-                          }
-                        }}
-                        placeholder="Edit your message..."
-                        rows={3}
-                      />
-                      {editImages.length > 0 && (
-                        <div className="edit-images">
-                          {editImages.map((img, imgIdx) => (
-                            <div key={imgIdx} className="edit-image-thumb">
-                              {img.dataUrl && <img src={img.dataUrl} alt={img.name} />}
-                              <button
-                                type="button"
-                                className="remove-edit-img"
-                                onClick={() => setEditImages(prev => prev.filter((_, i) => i !== imgIdx))}
-                              >
-                                ×
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                      <div className="edit-actions">
-                        <button
-                          type="button"
-                          className="edit-cancel-btn"
-                          onClick={handleCancelEdit}
-                        >
-                          Cancel
-                        </button>
-                        <button
-                          type="button"
-                          className="edit-save-btn"
-                          onClick={handleSaveEdit}
-                          disabled={!editInput.trim() && editImages.length === 0}
-                        >
-                          Save & Regenerate
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <>
-                      {turn.prompt && <div className="message-content">{turn.prompt}</div>}
-                      {turn.images && turn.images.length > 0 && (
-                        <div className="user-images">
-                          {turn.images.map((img, imgIdx) => (
-                            <div 
-                              key={imgIdx} 
-                              className="user-image-thumb clickable"
-                              onClick={() => img.dataUrl && setLightbox({
-                                imageData: img.dataUrl,
-                                prompt: `Input image: ${img.name}`,
-                                resolution: turn.resolution,
-                                aspectRatio: turn.aspectRatio,
-                                timestamp: turn.timestamp,
-                              })}
-                            >
-                              {img.dataUrl && <img src={img.dataUrl} alt={img.name} />}
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </>
-                  )}
                 </div>
               )}
 
-              {turn.role === 'model' && (
-                <div className="model-message">
-                  {turn.thoughts.length > 0 && (
-                    <details className="thinking-details" open={idx === conversation.length - 1}>
-                      <summary className="thinking-summary">
-                        <span className="thinking-icon">◐</span>
-                        THINKING ({turn.thoughts.length} part{turn.thoughts.length > 1 ? 's' : ''})
-                      </summary>
-                      <div className="thinking-content-wrap">
-                        {turn.thoughts.map((thought, tIdx) => (
-                          <div key={tIdx} className="thought-item">
-                            {thought.type === 'thought-text' && <pre className="thinking-content">{thought.text}</pre>}
-                            {thought.type === 'thought-image' && thought.imageData && (
-                              <div className="thought-image-card">
-                                <img src={thought.imageData} alt={`Draft ${tIdx + 1}`} />
-                                <span className="thought-badge">Draft {tIdx + 1}</span>
-                              </div>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    </details>
-                  )}
-
-                  {turn.outputs.map((output, oIdx) => {
-                    // Find the user prompt that generated this image
-                    const userTurnIdx = conversation.slice(0, idx).reverse().findIndex(t => t.role === 'user');
-                    const userTurn = userTurnIdx !== -1 ? conversation[idx - 1 - userTurnIdx] : undefined;
-                    const prompt = userTurn?.prompt;
-                    
-                    return (
-                      <div key={oIdx} className="output-item">
-                        {output.type === 'text' && output.text && <div className="response-text">{output.text}</div>}
-                        {output.type === 'image' && output.imageData && (
-                          <figure 
-                            className="output-image clickable"
-                            onClick={() => setLightbox({
-                              imageData: output.imageData!,
-                              prompt,
-                              resolution: turn.resolution,
-                              aspectRatio: turn.aspectRatio,
-                              generationTime: turn.generationTime,
-                              timestamp: turn.timestamp,
-                            })}
-                          >
-                            <img src={output.imageData} alt={`Generated ${oIdx + 1}`} />
-                            <figcaption>
-                              <span className="image-meta">{turn.resolution} · {turn.aspectRatio}</span>
-                              <div className="image-actions">
-                                <button
-                                  type="button"
-                                  className="img-action-btn"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    openImageInNewTab(output.imageData!);
-                                  }}
-                                  title="Open in new tab"
-                                >
-                                  ↗ Open
-                                </button>
-                                <button
-                                  type="button"
-                                  className="img-action-btn"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    downloadImage(
-                                      output.imageData!,
-                                      `gemini-${turn.resolution}-${turn.aspectRatio.replace(':', 'x')}-${Date.now()}.webp`
-                                    );
-                                  }}
-                                >
-                                  ↓ Download
-                                </button>
-                                <button
-                                  type="button"
-                                  className="img-action-btn regen"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleRegenerate(idx);
-                                  }}
-                                  disabled={current.isGenerating}
-                                  title="Regenerate this image"
-                                >
-                                  ↻ Regen
-                                </button>
-                                {generationMode === 'flowith' && output.flowithUrl && (
-                                  <button
-                                    type="button"
-                                    className={`img-action-btn reply ${flowithReplyContext?.imageUrl === output.flowithUrl ? 'active' : ''}`}
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      handleSelectFlowithReply(output, prompt || '', idx);
-                                    }}
-                                    disabled={current.isGenerating}
-                                    title="Reply to this image"
-                                  >
-                                    ↩ Reply
-                                  </button>
-                                )}
-                                {generationMode === 'local' && output.imageData && (
-                                  <button
-                                    type="button"
-                                    className={`img-action-btn reply ${localReplyContext?.imageDataUrl === output.imageData ? 'active' : ''}`}
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      handleSelectLocalReply(output, idx);
-                                    }}
-                                    disabled={current.isGenerating}
-                                    title="Reply to this image"
-                                  >
-                                    ↩ Reply
-                                  </button>
-                                )}
-                              </div>
-                            </figcaption>
-                          </figure>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          ))}
-
-          {current.isGenerating && (
-            <div className="generating-indicator">
-              {bulkResults.length > 0 ? (
-                <div className="bulk-progress">
-                  <div className="bulk-progress-header">
-                    <span className="pulse"></span>
-                    GENERATING {bulkResults.filter(r => r.status === 'done').length}/{bulkResults.length}
-                  </div>
-                  <div className="bulk-progress-grid">
-                    {bulkResults.map((result, idx) => (
-                      <div 
-                        key={result.id} 
-                        className={`bulk-slot ${result.status} ${result.errorType ? `error-${result.errorType}` : ''}`}
-                        title={result.error || undefined}
-                      >
-                        {result.status === 'pending' && <span className="slot-icon">◯</span>}
-                        {result.status === 'generating' && <span className="slot-icon spinning">◐</span>}
-                        {result.status === 'done' && result.outputs.find(o => o.type === 'image') ? (
-                          <img 
-                            src={result.outputs.find(o => o.type === 'image')?.imageData} 
-                            alt={`Result ${idx + 1}`} 
-                          />
-                        ) : result.status === 'done' ? (
-                          <span className="slot-icon">✓</span>
-                        ) : null}
-                        {result.status === 'error' && (
-                          <div className="slot-error">
-                            <span className="slot-icon error">
-                              {result.errorType === 'content_policy' ? '🚫' : '✕'}
-                            </span>
-                            <span className="slot-error-type">
-                              {result.errorType === 'content_policy' ? 'Blocked' : 'Failed'}
-                            </span>
-                          </div>
-                        )}
-                        <span className="slot-label">#{idx + 1}</span>
-                      </div>
-                    ))}
-                  </div>
-                  <div className="bulk-timer">{(elapsedTime / 1000).toFixed(1)}s</div>
-                </div>
-              ) : (
-                <div className="streaming-badge large">
-                  <span className="pulse"></span>
-                  {generationMode === 'flowith' && flowithProgress !== 'idle' ? (
-                    <>
-                      {flowithProgress === 'uploading' && 'UPLOADING IMAGES...'}
-                      {flowithProgress === 'connected' && 'CONNECTED...'}
-                      {flowithProgress === 'processing' && 'GENERATING...'}
-                    </>
-                  ) : (
-                    'GENERATING...'
-                  )} {(elapsedTime / 1000).toFixed(1)}s
-                </div>
-              )}
-            </div>
-          )}
-
-          {current.error && (
-            <div className={`error-banner ${current.errorType ? `error-${current.errorType}` : ''}`}>
-              <span className="error-icon">
-                {current.errorType === 'content_policy' ? '🚫' : '!'}
-              </span>
-              <div className="error-content">
-                <span className="error-message">{current.error}</span>
-                {generationMode === 'flowith' && lastPrompt && (
-                  <button
-                    type="button"
-                    className="error-retry-btn"
-                    onClick={() => {
-                      setCurrent(prev => ({ ...prev, error: undefined, errorType: undefined }));
-                      if (bulkCount > 1) {
-                        generateBulkWithFlowith(lastPrompt, lastImages);
-                      } else {
-                        generateWithFlowith(lastPrompt, lastImages);
-                      }
-                    }}
-                  >
-                    ↻ Retry
-                  </button>
-                )}
-              </div>
-            </div>
-          )}
-        </div>
-
-        <form onSubmit={handleSubmit} className="prompt-form sticky">
-          {lastModelTurn && lastModelTurn.outputs.some(o => o.type === 'image') && (
-            <div className="edit-hint">
-              Continue editing or paste/upload new reference images
-            </div>
-          )}
-
-          {flowithReplyContext && generationMode === 'flowith' && (
-            <div className="flowith-reply-context">
-              <div className="reply-context-header">
-                <span className="reply-label">↩ Replying to:</span>
-                <button 
-                  type="button" 
-                  className="clear-reply-btn"
-                  onClick={handleClearFlowithReply}
-                  disabled={current.isGenerating}
-                >
-                  ×
-                </button>
-              </div>
-              <div className="reply-preview">
-                <img src={flowithReplyContext.imageDataUrl} alt="Reply context" />
-                <span className="reply-info">{flowithReplyContext.history.length} messages in context</span>
-              </div>
-            </div>
-          )}
-
-          {localReplyContext && generationMode === 'local' && (
-            <div className="flowith-reply-context">
-              <div className="reply-context-header">
-                <span className="reply-label">↩ Replying to:</span>
-                <button 
-                  type="button" 
-                  className="clear-reply-btn"
-                  onClick={handleClearLocalReply}
-                  disabled={current.isGenerating}
-                >
-                  ×
-                </button>
-              </div>
-              <div className="reply-preview">
-                <img src={localReplyContext.imageDataUrl} alt="Reply context" />
-                <span className="reply-info">{localReplyContext.history.length} turns in context</span>
-              </div>
-            </div>
-          )}
-
-          {uploadedImages.length > 0 && (
-            <div className="uploaded-images-row">
-              {uploadedImages.map(img => (
-                <div key={img.id} className="uploaded-image-preview">
-                  <img src={img.dataUrl} alt={img.name} />
-                  <button
-                    type="button"
-                    className="remove-image-btn"
-                    onClick={() => removeImage(img.id)}
-                    disabled={current.isGenerating}
+              {/* Legacy session warning */}
+              {legacySessionWarning && (
+                <div className="legacy-warning">
+                  <span className="warning-icon">⚠</span>
+                  <span>This session was created before signature support. Multi-turn editing may not work. Consider starting a new session.</span>
+                  <button 
+                    type="button" 
+                    className="dismiss-warning"
+                    onClick={() => setLegacySessionWarning(false)}
                   >
                     ×
                   </button>
                 </div>
+              )}
+
+              {conversation.map((turn, idx) => (
+                <div key={idx} className={`turn turn-${turn.role}`}>
+                  {turn.role === 'user' && (
+                    <div className="user-message">
+                      <div className="message-meta">
+                        <span className="role-label">YOU</span>
+                        <span className="turn-config">{turn.resolution} · {turn.aspectRatio}</span>
+                        
+                        {/* Version navigation for branched messages */}
+                        {turn.versions && turn.versions.length > 0 && (
+                          <div className="version-nav">
+                            <button
+                              type="button"
+                              className="version-btn"
+                              onClick={() => handleVersionChange(idx, 'prev')}
+                              disabled={(turn.selectedVersion ?? turn.versions.length) === 0 || current.isGenerating}
+                            >
+                              ‹
+                            </button>
+                            <span className="version-indicator">
+                              {(turn.selectedVersion ?? turn.versions.length) + 1} / {turn.versions.length + 1}
+                            </span>
+                            <button
+                              type="button"
+                              className="version-btn"
+                              onClick={() => handleVersionChange(idx, 'next')}
+                              disabled={(turn.selectedVersion ?? turn.versions.length) === turn.versions.length || current.isGenerating}
+                            >
+                              ›
+                            </button>
+                          </div>
+                        )}
+                        
+                        {/* Edit and Delete buttons */}
+                        <div className="message-actions">
+                          {editingTurnIdx !== idx && (
+                            <>
+                              <button
+                                type="button"
+                                className="msg-action-btn regen"
+                                onClick={() => handleRegenerateFromUserTurn(idx)}
+                                disabled={current.isGenerating}
+                                title="Regenerate with current settings"
+                              >
+                                ↻
+                              </button>
+                              <button
+                                type="button"
+                                className={`msg-action-btn copy ${copiedPromptIdx === idx ? 'copied' : ''}`}
+                                onClick={() => handleCopyPrompt(turn.prompt || '', idx)}
+                                title={copiedPromptIdx === idx ? "Copied!" : "Copy prompt"}
+                              >
+                                {copiedPromptIdx === idx ? '✓' : '⧉'}
+                              </button>
+                              <button
+                                type="button"
+                                className="msg-action-btn edit"
+                                onClick={() => handleStartEdit(idx)}
+                                disabled={current.isGenerating}
+                                title="Edit this message"
+                              >
+                                ✎
+                              </button>
+                              <button
+                                type="button"
+                                className="msg-action-btn delete"
+                                onClick={() => handleDeleteTurn(idx)}
+                                disabled={current.isGenerating}
+                                title="Delete this turn"
+                              >
+                                ✕
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                      
+                      {/* Edit mode UI */}
+                      {editingTurnIdx === idx ? (
+                        <div className="edit-mode">
+                          <textarea
+                            className="edit-textarea"
+                            value={editInput}
+                            onChange={(e) => setEditInput(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                                e.preventDefault();
+                                if (editInput.trim() || editImages.length > 0) {
+                                  handleSaveEdit();
+                                }
+                              }
+                              if (e.key === 'Escape') {
+                                handleCancelEdit();
+                              }
+                            }}
+                            placeholder="Edit your message..."
+                            rows={3}
+                          />
+                          {editImages.length > 0 && (
+                            <div className="edit-images">
+                              {editImages.map((img, imgIdx) => (
+                                <div key={imgIdx} className="edit-image-thumb">
+                                  {img.dataUrl && <img src={img.dataUrl} alt={img.name} />}
+                                  <button
+                                    type="button"
+                                    className="remove-edit-img"
+                                    onClick={() => setEditImages(prev => prev.filter((_, i) => i !== imgIdx))}
+                                  >
+                                    ×
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          <div className="edit-actions">
+                            <button
+                              type="button"
+                              className="edit-cancel-btn"
+                              onClick={handleCancelEdit}
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              className="edit-save-btn"
+                              onClick={handleSaveEdit}
+                              disabled={!editInput.trim() && editImages.length === 0}
+                            >
+                              Save & Regenerate
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          {turn.prompt && <div className="message-content">{turn.prompt}</div>}
+                          {turn.images && turn.images.length > 0 && (
+                            <div className="user-images">
+                              {turn.images.map((img, imgIdx) => (
+                                <div 
+                                  key={imgIdx} 
+                                  className="user-image-thumb clickable"
+                                  onClick={() => img.dataUrl && setLightbox({
+                                    imageData: img.dataUrl,
+                                    prompt: `Input image: ${img.name}`,
+                                    resolution: turn.resolution,
+                                    aspectRatio: turn.aspectRatio,
+                                    timestamp: turn.timestamp,
+                                  })}
+                                >
+                                  {img.dataUrl && <img src={img.dataUrl} alt={img.name} />}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  )}
+
+                  {turn.role === 'model' && (
+                    <div className="model-message">
+                      {turn.thoughts.length > 0 && (
+                        <details className="thinking-details" open={idx === conversation.length - 1}>
+                          <summary className="thinking-summary">
+                            <span className="thinking-icon">◐</span>
+                            THINKING ({turn.thoughts.length} part{turn.thoughts.length > 1 ? 's' : ''})
+                          </summary>
+                          <div className="thinking-content-wrap">
+                            {turn.thoughts.map((thought, tIdx) => (
+                              <div key={tIdx} className="thought-item">
+                                {thought.type === 'thought-text' && <pre className="thinking-content">{thought.text}</pre>}
+                                {thought.type === 'thought-image' && thought.imageData && (
+                                  <div className="thought-image-card">
+                                    <img src={thought.imageData} alt={`Draft ${tIdx + 1}`} />
+                                    <span className="thought-badge">Draft {tIdx + 1}</span>
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </details>
+                      )}
+
+                      {turn.outputs.map((output, oIdx) => {
+                        // Find the user prompt that generated this image
+                        const userTurnIdx = conversation.slice(0, idx).reverse().findIndex(t => t.role === 'user');
+                        const userTurn = userTurnIdx !== -1 ? conversation[idx - 1 - userTurnIdx] : undefined;
+                        const prompt = userTurn?.prompt;
+                        
+                        return (
+                          <div key={oIdx} className="output-item">
+                            {output.type === 'text' && output.text && <div className="response-text">{output.text}</div>}
+                            {output.type === 'image' && output.imageData && (
+                              <figure 
+                                className="output-image clickable"
+                                onClick={() => setLightbox({
+                                  imageData: output.imageData!,
+                                  prompt,
+                                  resolution: turn.resolution,
+                                  aspectRatio: turn.aspectRatio,
+                                  generationTime: turn.generationTime,
+                                  timestamp: turn.timestamp,
+                                })}
+                              >
+                                <img src={output.imageData} alt={`Generated ${oIdx + 1}`} />
+                                <figcaption>
+                                  <span className="image-meta">{turn.resolution} · {turn.aspectRatio}</span>
+                                  <div className="image-actions">
+                                    <button
+                                      type="button"
+                                      className="img-action-btn"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        openImageInNewTab(output.imageData!);
+                                      }}
+                                      title="Open in new tab"
+                                    >
+                                      ↗ Open
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="img-action-btn"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        downloadImage(
+                                          output.imageData!,
+                                          `gemini-${turn.resolution}-${turn.aspectRatio.replace(':', 'x')}-${Date.now()}.webp`
+                                        );
+                                      }}
+                                    >
+                                      ↓ Download
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="img-action-btn regen"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleRegenerate(idx);
+                                      }}
+                                      disabled={current.isGenerating}
+                                      title="Regenerate this image"
+                                    >
+                                      ↻ Regen
+                                    </button>
+                                    {generationMode === 'flowith' && output.flowithUrl && (
+                                      <button
+                                        type="button"
+                                        className={`img-action-btn reply ${flowithReplyContext?.imageUrl === output.flowithUrl ? 'active' : ''}`}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          handleSelectFlowithReply(output, prompt || '', idx);
+                                        }}
+                                        disabled={current.isGenerating}
+                                        title="Reply to this image"
+                                      >
+                                        ↩ Reply
+                                      </button>
+                                    )}
+                                    {generationMode === 'local' && output.imageData && (
+                                      <button
+                                        type="button"
+                                        className={`img-action-btn reply ${localReplyContext?.imageDataUrl === output.imageData ? 'active' : ''}`}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          handleSelectLocalReply(output, idx);
+                                        }}
+                                        disabled={current.isGenerating}
+                                        title="Reply to this image"
+                                      >
+                                        ↩ Reply
+                                      </button>
+                                    )}
+                                  </div>
+                                </figcaption>
+                              </figure>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
               ))}
-              <span className="image-count">{uploadedImages.length}/14</span>
-            </div>
-          )}
 
-          <div className="input-wrapper">
-            <div className="input-row">
-              <button
-                type="button"
-                className="upload-btn"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={current.isGenerating || uploadedImages.length >= 14}
-                title="Upload reference images (up to 14)"
-              >
-                <span className="upload-icon">+</span>
-              </button>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                multiple
-                onChange={handleFileSelect}
-                style={{ display: 'none' }}
-              />
-              <textarea
-                ref={textareaRef}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onPaste={handlePaste}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    handleSubmit(e);
-                  }
-                }}
-                placeholder={uploadedImages.length > 0 
-                  ? "Describe what to do with these images..." 
-                  : conversation.length > 0 
-                    ? "Describe your edit... (Ctrl+V to paste)" 
-                    : "Describe your vision or paste images (Ctrl+V)..."}
-                disabled={current.isGenerating}
-                className="prompt-input"
-                rows={2}
-              />
-              <button type="submit" disabled={!canSubmit} className="btn btn-generate">
-                <span className="btn-icon">→</span>
-                {current.isGenerating ? '...' : conversation.length > 0 ? 'EDIT' : 'GO'}
-              </button>
-            </div>
-          </div>
-          {duration && !current.isGenerating && (
-            <div className="timing-info">Generated in {duration}s</div>
-          )}
-        </form>
-      </main>
-
-      {/* Image Lightbox Modal */}
-      {lightbox && (
-        <div className="lightbox-overlay" onClick={() => setLightbox(null)}>
-          <div className="lightbox-content" onClick={(e) => e.stopPropagation()}>
-            <button className="lightbox-close" onClick={() => setLightbox(null)}>×</button>
-            <div className="lightbox-image-wrap">
-              <img src={lightbox.imageData} alt="Full size" />
-            </div>
-            <div className="lightbox-info">
-              {lightbox.prompt && (
-                <div className="lightbox-prompt">
-                  <span className="lightbox-label">PROMPT</span>
-                  <p>{lightbox.prompt}</p>
+              {current.isGenerating && (
+                <div className="generating-indicator">
+                  {bulkResults.length > 0 ? (
+                    <div className="bulk-progress">
+                      <div className="bulk-progress-header">
+                        <span className="pulse"></span>
+                        GENERATING {bulkResults.filter(r => r.status === 'done').length}/{bulkResults.length}
+                      </div>
+                      <div className="bulk-progress-grid">
+                        {bulkResults.map((result, idx) => (
+                          <div 
+                            key={result.id} 
+                            className={`bulk-slot ${result.status} ${result.errorType ? `error-${result.errorType}` : ''}`}
+                            title={result.error || undefined}
+                          >
+                            {result.status === 'pending' && <span className="slot-icon">◯</span>}
+                            {result.status === 'generating' && <span className="slot-icon spinning">◐</span>}
+                            {result.status === 'done' && result.outputs.find(o => o.type === 'image') ? (
+                              <img 
+                                src={result.outputs.find(o => o.type === 'image')?.imageData} 
+                                alt={`Result ${idx + 1}`} 
+                              />
+                            ) : result.status === 'done' ? (
+                              <span className="slot-icon">✓</span>
+                            ) : null}
+                            {result.status === 'error' && (
+                              <div className="slot-error">
+                                <span className="slot-icon error">
+                                  {result.errorType === 'content_policy' ? '🚫' : '✕'}
+                                </span>
+                                <span className="slot-error-type">
+                                  {result.errorType === 'content_policy' ? 'Blocked' : 'Failed'}
+                                </span>
+                              </div>
+                            )}
+                            <span className="slot-label">#{idx + 1}</span>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="bulk-timer">{(elapsedTime / 1000).toFixed(1)}s</div>
+                    </div>
+                  ) : (
+                    <div className="streaming-badge large">
+                      <span className="pulse"></span>
+                      {generationMode === 'flowith' && flowithProgress !== 'idle' ? (
+                        <>
+                          {flowithProgress === 'uploading' && 'UPLOADING IMAGES...'}
+                          {flowithProgress === 'connected' && 'CONNECTED...'}
+                          {flowithProgress === 'processing' && 'GENERATING...'}
+                        </>
+                      ) : (
+                        'GENERATING...'
+                      )} {(elapsedTime / 1000).toFixed(1)}s
+                    </div>
+                  )}
                 </div>
               )}
-              <div className="lightbox-stats">
-                <div className="stat">
-                  <span className="stat-label">Resolution</span>
-                  <span className="stat-value">{lightbox.resolution}</span>
-                </div>
-                <div className="stat">
-                  <span className="stat-label">Aspect Ratio</span>
-                  <span className="stat-value">{lightbox.aspectRatio}</span>
-                </div>
-                {lightbox.generationTime && (
-                  <div className="stat">
-                    <span className="stat-label">Gen Time</span>
-                    <span className="stat-value">{(lightbox.generationTime / 1000).toFixed(1)}s</span>
+
+              {current.error && (
+                <div className={`error-banner ${current.errorType ? `error-${current.errorType}` : ''}`}>
+                  <span className="error-icon">
+                    {current.errorType === 'content_policy' ? '🚫' : '!'}
+                  </span>
+                  <div className="error-content">
+                    <span className="error-message">{current.error}</span>
+                    {generationMode === 'flowith' && lastPrompt && (
+                      <button
+                        type="button"
+                        className="error-retry-btn"
+                        onClick={() => {
+                          setCurrent(prev => ({ ...prev, error: undefined, errorType: undefined }));
+                          if (bulkCount > 1) {
+                            generateBulkWithFlowith(lastPrompt, lastImages);
+                          } else {
+                            generateWithFlowith(lastPrompt, lastImages);
+                          }
+                        }}
+                      >
+                        ↻ Retry
+                      </button>
+                    )}
                   </div>
-                )}
-                <div className="stat">
-                  <span className="stat-label">Created</span>
-                  <span className="stat-value">{lightbox.timestamp.toLocaleString()}</span>
+                </div>
+              )}
+            </div>
+
+            <form onSubmit={handleSubmit} className="prompt-form sticky">
+              {lastModelTurn && lastModelTurn.outputs.some(o => o.type === 'image') && (
+                <div className="edit-hint">
+                  Continue editing or paste/upload new reference images
+                </div>
+              )}
+
+              {flowithReplyContext && generationMode === 'flowith' && (
+                <div className="flowith-reply-context">
+                  <div className="reply-context-header">
+                    <span className="reply-label">↩ Replying to:</span>
+                    <button 
+                      type="button" 
+                      className="clear-reply-btn"
+                      onClick={handleClearFlowithReply}
+                    >
+                      ×
+                    </button>
+                  </div>
+                  <div className="reply-preview">
+                    <img src={flowithReplyContext.imageDataUrl} alt="Reply context" />
+                    <span className="reply-info">{flowithReplyContext.history.length} messages in context</span>
+                  </div>
+                </div>
+              )}
+
+              {localReplyContext && generationMode === 'local' && (
+                <div className="flowith-reply-context">
+                  <div className="reply-context-header">
+                    <span className="reply-label">↩ Replying to:</span>
+                    <button 
+                      type="button" 
+                      className="clear-reply-btn"
+                      onClick={handleClearLocalReply}
+                    >
+                      ×
+                    </button>
+                  </div>
+                  <div className="reply-preview">
+                    <img src={localReplyContext.imageDataUrl} alt="Reply context" />
+                    <span className="reply-info">{localReplyContext.history.length} turns in context</span>
+                  </div>
+                </div>
+              )}
+
+              {uploadedImages.length > 0 && (
+                <div className="uploaded-images-row">
+                  {uploadedImages.map(img => (
+                    <div key={img.id} className="uploaded-image-preview">
+                      <img src={img.dataUrl} alt={img.name} />
+                      <button
+                        type="button"
+                        className="remove-image-btn"
+                        onClick={() => removeImage(img.id)}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                  <span className="image-count">{uploadedImages.length}/14</span>
+                </div>
+              )}
+
+              <div className="input-wrapper">
+                <div className="input-row">
+                  <button
+                    type="button"
+                    className="upload-btn"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={uploadedImages.length >= 14}
+                    title="Upload reference images (up to 14)"
+                  >
+                    <span className="upload-icon">+</span>
+                  </button>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    onChange={handleFileSelect}
+                    style={{ display: 'none' }}
+                  />
+                  <textarea
+                    ref={textareaRef}
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    onPaste={handlePaste}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        handleSubmit(e);
+                      }
+                    }}
+                    placeholder={uploadedImages.length > 0 
+                      ? "Describe what to do with these images..." 
+                      : conversation.length > 0 
+                        ? "Describe your edit... (Ctrl+V to paste)" 
+                        : "Describe your vision or paste images (Ctrl+V)..."}
+                    className="prompt-input"
+                    rows={2}
+                  />
+                  <button type="submit" disabled={!canSubmit} className="btn btn-generate">
+                    <span className="btn-icon">→</span>
+                    {current.isGenerating ? '...' : conversation.length > 0 ? 'EDIT' : 'GO'}
+                  </button>
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={() => downloadImage(
-                  lightbox.imageData,
-                  `gemini-${lightbox.resolution}-${lightbox.aspectRatio.replace(':', 'x')}-${Date.now()}.webp`
+              {duration && !current.isGenerating && (
+                <div className="timing-info">Generated in {duration}s</div>
+              )}
+            </form>
+          </>
+        )}
+
+        {/* Image Lightbox Modal */}
+        {lightbox && (
+          <div className="lightbox-overlay" onClick={() => setLightbox(null)}>
+            <div className="lightbox-content" onClick={(e) => e.stopPropagation()}>
+              <button className="lightbox-close" onClick={() => setLightbox(null)}>×</button>
+              <div className="lightbox-image-wrap">
+                <img src={lightbox.imageData} alt="Full size" />
+              </div>
+              <div className="lightbox-info">
+                {lightbox.prompt && (
+                  <div className="lightbox-prompt">
+                    <span className="lightbox-label">PROMPT</span>
+                    <p>{lightbox.prompt}</p>
+                  </div>
                 )}
-                className="lightbox-download"
-              >
-                ↓ Download Full Size
-              </button>
+                <div className="lightbox-stats">
+                  <div className="stat">
+                    <span className="stat-label">Resolution</span>
+                    <span className="stat-value">{lightbox.resolution}</span>
+                  </div>
+                  <div className="stat">
+                    <span className="stat-label">Aspect Ratio</span>
+                    <span className="stat-value">{lightbox.aspectRatio}</span>
+                  </div>
+                  {lightbox.generationTime && (
+                    <div className="stat">
+                      <span className="stat-label">Gen Time</span>
+                      <span className="stat-value">{(lightbox.generationTime / 1000).toFixed(1)}s</span>
+                    </div>
+                  )}
+                  <div className="stat">
+                    <span className="stat-label">Created</span>
+                    <span className="stat-value">{lightbox.timestamp.toLocaleString()}</span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => downloadImage(
+                    lightbox.imageData,
+                    `gemini-${lightbox.resolution}-${lightbox.aspectRatio.replace(':', 'x')}-${Date.now()}.webp`
+                  )}
+                  className="lightbox-download"
+                >
+                  ↓ Download Full Size
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </main>
     </div>
   );
 }
